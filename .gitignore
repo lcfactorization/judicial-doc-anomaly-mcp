@@ -1,0 +1,54 @@
+# .gitignore for judicial-lint-mcp
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+!.env.example
+
+# Cache
+.judicial_lint_cache/
+.cache/
+
+# Output (generated reports, NOT documentation)
+output/
+# NOTE: Do NOT add *.md here — it blocks INSTALL_GUIDE_ZH.md, CONTRIBUTING.md, etc.
+# If you want to exclude generated report .md files, add patterns like:
+#     report_*.md
+#     */output/*.md
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
