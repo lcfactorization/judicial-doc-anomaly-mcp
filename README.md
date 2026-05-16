@@ -33,7 +33,7 @@
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/Justice-and-Equity/judicial-doc-anomaly-mcp.git
+git clone https://github.com/lcfactorization/judicial-doc-anomaly-mcp.git
 cd judicial-doc-anomaly-mcp
 
 # 2. 安装
@@ -192,7 +192,7 @@ An **automated judicial document anomaly detection tool** that analyzes judgment
 
 ```bash
 # 1. Clone
-git clone https://github.com/Justice-and-Equity/judicial-doc-anomaly-mcp.git
+git clone https://github.com/lcfactorization/judicial-doc-anomaly-mcp.git
 cd judicial-doc-anomaly-mcp
 
 # 2. Install
@@ -343,9 +343,9 @@ If you use this tool in your research or practice, please cite:
 ```bibtex
 @software{judicial_lint_mcp,
   title = {Judicial Document Anomaly Detection MCP Server},
-  author = {Justice-and-Equity},
+  author = {lcfactorization},
   year = {2026},
-  url = {https://github.com/Justice-and-Equity/judicial-doc-anomaly-mcp},
+  url = {https://github.com/lcfactorization/judicial-doc-anomaly-mcp},
   license = {MIT}
 }
 ```
