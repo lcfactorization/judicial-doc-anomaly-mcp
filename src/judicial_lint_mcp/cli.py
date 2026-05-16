@@ -1,8 +1,18 @@
-"""CLI entry point for judicial-lint"""
+"""CLI v0.4.0 — Simple Agent that uses MCP Server bridge tools.
+
+This CLI demonstrates how an AI Agent would use the MCP Server:
+  1. render_skill / render_pipeline → get prompts
+  2. Send prompts to LLM (via API)
+  3. parse_response → parse LLM output into structured data
+  4. build_report → generate formatted Markdown report
+
+The MCP Server does NOT call any LLM. It only provides
+Skill loading, template rendering, response parsing, and report building.
+"""
 
 import asyncio
 import json
-import re
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -12,170 +22,223 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from .config import AppConfig
-from .detector import DetectionEngine
-
 console = Console()
 
 
-@click.group()
-@click.version_option(version="0.1.0")
-@click.option("--config", "-c", type=click.Path(), help="配置文件路径")
-@click.option("--verbose", "-v", is_flag=True, help="详细输出")
-@click.pass_context
-def cli(ctx, config, verbose):
-    """司法文书异常检测工具 - judicial-lint"""
-    ctx.ensure_object(dict)
-    ctx.obj["config_file"] = config
-    ctx.obj["verbose"] = verbose
-
-
-@cli.command()
-@click.argument("case_dir", type=click.Path(exists=True))
-@click.option("--dimensions", "-d", multiple=True, help="指定检测维度")
-@click.option("--model", "-m", help="LLM 模型名称")
-@click.option("--output", "-o", type=click.Path(), help="输出文件路径")
-@click.option(
-    "--format",
-    "output_format",
-    type=click.Choice(["markdown", "json", "both"]),
-    default="markdown",
-    help="输出格式",
-)
-@click.option("--no-adversarial", is_flag=True, help="禁用对抗校验")
-@click.pass_context
-def analyze(ctx, case_dir, dimensions, model, output, output_format, no_adversarial):
-    """对案件目录进行异常检测"""
-    config_file = ctx.obj.get("config_file")
-    if config_file:
-        config = AppConfig.from_file(config_file)
-    else:
-        config = AppConfig.from_env()
-
-    if model:
-        config.llm.model = model
-    if dimensions:
-        config.detection.dimensions = list(dimensions)
-    if no_adversarial:
-        config.detection.enable_adversarial_check = False
-
-    async def run():
-        engine = DetectionEngine(config)
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task("正在检测...", total=None)
-            result = await engine.run_detection(case_dir)
-            progress.update(task, description="检测完成！")
-
-        # Output results
-        if output:
-            output_path = Path(output)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-
-            if output_format in ["markdown", "both"]:
-                if output_path.suffix != ".md":
-                    output_path = output_path.with_suffix(".md")
-                with open(output_path, "w", encoding="utf-8") as f:
-                    f.write(result.report_markdown)
-                console.print(f"[green]Markdown 报告已保存至：{output_path}[/green]")
-
-            if output_format in ["json", "both"]:
-                json_path = (
-                    output_path.with_suffix(".json")
-                    if output_path.suffix != ".json"
-                    else output_path
-                )
-                with open(json_path, "w", encoding="utf-8") as f:
-                    json.dump(result.model_dump(), f, ensure_ascii=False, indent=2)
-                console.print(f"[green]JSON 报告已保存至：{json_path}[/green]")
-        else:
-            date_str = datetime.now().strftime("%Y%m%d")
-            case_id = re.sub(r"[^\w\u4e00-\u9fa5]", "", result.case_name)[:20]
-            model_label = config.llm.model.replace("/", "_")
-            default_name = f"司法文书异常检测报告_{case_id}_{model_label}_v0.2.0_{date_str}.md"
-            default_path = Path(case_dir) / default_name
-            with open(default_path, "w", encoding="utf-8") as f:
-                f.write(result.report_markdown)
-            console.print(f"[green]Markdown 报告已保存至：{default_path}[/green]")
-
-        # Summary
-        summary_table = Table(title="检测摘要")
-        summary_table.add_column("项目", style="cyan")
-        summary_table.add_column("值", style="green")
-        summary_table.add_row("案件名称", result.case_name)
-        summary_table.add_row("综合异常等级", result.risk_level)
-        summary_table.add_row("材料完整性", f"{result.completeness_score:.1f}%")
-        summary_table.add_row("总 Token 消耗", str(result.total_tokens_used))
-        console.print(summary_table)
-
-    asyncio.run(run())
-
-
-@cli.command()
-@click.argument("case_dir", type=click.Path(exists=True))
-@click.option("--dimensions", "-d", multiple=True, help="指定检测维度")
-def dry_run(case_dir, dimensions):
-    """预览检测流程和 Token 消耗"""
-    from .detector import FileLoader
-    from .prompts import DIMENSION_PROMPTS
-
-    loader = FileLoader(case_dir)
-    loader.load()
-    completeness, missing = loader.validate()
-    materials = loader.get_materials_text()
-
-    dims = list(dimensions) if dimensions else list(DIMENSION_PROMPTS.keys())
-
-    console.print(
-        Panel(
-            f"材料完整性：{completeness:.1f}/100\n"
-            f"缺失材料：{', '.join(missing) if missing else '无'}\n"
-            f"材料总字符：{len(materials)}\n"
-            f"预估 Token：{int(len(materials) * 0.5)}",
-            title="材料分析",
-            border_style="cyan",
-        )
+def _get_tool_function(tool_name: str):
+    from .server import (
+        build_report,
+        list_skills,
+        parse_response,
+        render_pipeline,
+        render_skill,
+        write_skill,
     )
 
-    table = Table(title="检测维度预估")
-    table.add_column("维度", style="cyan")
-    table.add_column("Prompt 字符", justify="right")
-    table.add_column("预估 Token", justify="right")
+    tools = {
+        "render_skill": render_skill,
+        "render_pipeline": render_pipeline,
+        "parse_response": parse_response,
+        "build_report": build_report,
+        "list_skills": list_skills,
+        "write_skill": write_skill,
+    }
+    return tools.get(tool_name)
 
-    total_tokens = 0
-    for dim in dims:
-        if dim in DIMENSION_PROMPTS:
-            prompt = DIMENSION_PROMPTS[dim]
-            tokens = int(len(prompt) * 0.5)
-            total_tokens += tokens
-            table.add_row(dim, str(len(prompt)), str(tokens))
 
-    table.add_row("总计", "", str(total_tokens), style="bold green")
-    console.print(table)
+def _call_tool(tool_name: str, arguments: dict) -> str:
+    fn = _get_tool_function(tool_name)
+    if not fn:
+        return f"未知工具：{tool_name}"
+    return fn(**arguments)
+
+
+@click.group()
+@click.version_option(version="0.4.0")
+@click.pass_context
+def cli(ctx):
+    """司法文书异常检测工具 v0.4.0 (Bridge Architecture)"""
+    ctx.ensure_object(dict)
 
 
 @cli.command()
-def list_dimensions():
-    """列出所有可用的检测维度"""
-    from .prompts import DIMENSION_PROMPTS, DIMENSION_ORDER, DIMENSION_LABELS
+@click.argument("skill_name")
+@click.option("--variable", "-v", multiple=True, help="模板变量 key=value")
+@click.option("--output", "-o", type=click.Path(), help="输出文件路径")
+def render(skill_name, variable, output):
+    """渲染单个 Skill 的提示词（供 Agent 发送给 LLM）"""
+    variables = {}
+    for v in variable:
+        if "=" in v:
+            k, val = v.split("=", 1)
+            variables[k] = val
 
-    table = Table(title="可用检测维度")
-    table.add_column("维度 ID", style="cyan")
-    table.add_column("中文名称", style="green")
+    result = _call_tool("render_skill", {
+        "skill_name": skill_name,
+        "variables": variables or None,
+    })
 
-    for dim in DIMENSION_ORDER:
-        if dim in DIMENSION_PROMPTS:
-            table.add_row(dim, DIMENSION_LABELS.get(dim, ""))
+    if output:
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        Path(output).write_text(result, encoding="utf-8")
+        console.print(f"[green]提示词已保存至：{output}[/green]")
+    else:
+        try:
+            data = json.loads(result)
+            if "error" in data:
+                console.print(f"[red]{data['error']}[/red]")
+            else:
+                console.print(Panel(
+                    f"Skill: {data['skill_title']}\n"
+                    f"System Prompt: {len(data['system_prompt'])} 字符\n"
+                    f"User Prompt: {len(data['user_prompt'])} 字符",
+                    title=f"渲染结果：{skill_name}",
+                ))
+                console.print(f"\n## System Prompt\n\n{data['system_prompt'][:500]}...\n")
+                console.print(f"\n## User Prompt\n\n{data['user_prompt'][:500]}...")
+        except json.JSONDecodeError:
+            console.print(result)
 
-    console.print(table)
+
+@cli.command()
+@click.argument("pipeline_name")
+@click.option("--variable", "-v", multiple=True, help="模板变量 key=value")
+@click.option("--output", "-o", type=click.Path(), help="输出文件路径")
+def pipeline(pipeline_name, variable, output):
+    """渲染流水线中所有 Skill 的提示词"""
+    variables = {}
+    for v in variable:
+        if "=" in v:
+            k, val = v.split("=", 1)
+            variables[k] = val
+
+    result = _call_tool("render_pipeline", {
+        "pipeline_name": pipeline_name,
+        "variables": variables or None,
+    })
+
+    if output:
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        Path(output).write_text(result, encoding="utf-8")
+        console.print(f"[green]流水线提示词已保存至：{output}[/green]")
+    else:
+        try:
+            data = json.loads(result)
+            if "error" in data:
+                console.print(f"[red]{data['error']}[/red]")
+            else:
+                table = Table(title=f"流水线：{pipeline_name}")
+                table.add_column("#", style="cyan")
+                table.add_column("Skill", style="green")
+                table.add_column("标题")
+                table.add_column("System", justify="right")
+                table.add_column("User", justify="right")
+                for i, s in enumerate(data["skills"], 1):
+                    table.add_row(
+                        str(i),
+                        s["skill_name"],
+                        s.get("skill_title", ""),
+                        f"{len(s.get('system_prompt', ''))} 字符",
+                        f"{len(s.get('user_prompt', ''))} 字符",
+                    )
+                console.print(table)
+                console.print(f"\n总 Skill 数：{data['total_skills']}")
+                console.print(f"预估 Prompt 字符数：{data['estimated_prompt_chars']}")
+                console.print(f"预估 Prompt token：{data['estimated_prompt_tokens']}")
+        except json.JSONDecodeError:
+            console.print(result)
+
+
+@cli.command(name="list")
+@click.option("--category", "-t", help="按类型筛选 (dimension/phase/pipeline)")
+def list_skills_cmd(category):
+    """列出所有可用的 Skills"""
+    result = _call_tool("list_skills", {"category": category})
+    console.print(result)
+
+
+@cli.command()
+@click.argument("dimension")
+@click.argument("response_file", type=click.Path(exists=True))
+@click.option("--index", "-i", default=0, help="维度索引（0-15）")
+@click.option("--output", "-o", type=click.Path(), help="输出文件路径")
+def parse(dimension, response_file, index, output):
+    """解析 LLM 响应为结构化异常数据"""
+    response_text = Path(response_file).read_text(encoding="utf-8")
+
+    result = _call_tool("parse_response", {
+        "dimension": dimension,
+        "response": response_text,
+        "dimension_index": index,
+    })
+
+    if output:
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        Path(output).write_text(result, encoding="utf-8")
+        console.print(f"[green]解析结果已保存至：{output}[/green]")
+    else:
+        try:
+            data = json.loads(result)
+            console.print(Panel(
+                f"维度：{data['dimension']}\n"
+                f"异常数：{data['anomaly_count']}\n"
+                f"风险等级：{data['risk_level']}",
+                title="解析结果",
+            ))
+        except json.JSONDecodeError:
+            console.print(result)
+
+
+@cli.command()
+@click.argument("case_name")
+@click.argument("results_file", type=click.Path(exists=True))
+@click.option("--doc-type", "-d", default="判决书", help="文书类型")
+@click.option("--model", "-m", default="AI Agent", help="模型名称")
+@click.option("--output", "-o", type=click.Path(), help="输出文件路径")
+def report(case_name, results_file, doc_type, model, output):
+    """从结构化数据生成检测报告"""
+    results_json = Path(results_file).read_text(encoding="utf-8")
+
+    result = _call_tool("build_report", {
+        "case_name": case_name,
+        "dimension_results_json": results_json,
+        "doc_type": doc_type,
+        "model_name": model,
+    })
+
+    if output:
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        Path(output).write_text(result, encoding="utf-8")
+        console.print(f"[green]报告已保存至：{output}[/green]")
+    else:
+        date_str = datetime.now().strftime("%Y%m%d")
+        default_name = f"司法文书异常检测报告_AI-Agent_v0.4.0_{date_str}.md"
+        default_path = Path(".") / default_name
+        default_path.write_text(result, encoding="utf-8")
+        console.print(f"[green]报告已保存至：{default_path}[/green]")
+
+
+@cli.command()
+@click.argument("skill_name")
+@click.argument("content_file", type=click.Path(exists=True))
+def write(skill_name, content_file):
+    """写入或更新 SKILL.md 文件（供 Agent 迭代优化提示词）"""
+    content = Path(content_file).read_text(encoding="utf-8")
+    result = _call_tool("write_skill", {
+        "skill_name": skill_name,
+        "content": content,
+    })
+    console.print(result)
+
+
+@cli.command()
+def serve():
+    """启动 MCP Server（stdio 模式）"""
+    from .server import main as server_main
+    server_main()
 
 
 def main():
-    """CLI entry point"""
     cli()
 
 
