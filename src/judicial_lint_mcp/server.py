@@ -1,4 +1,4 @@
-"""MCP Server v0.4.0 — Bridge Architecture.
+"""MCP Server v0.5.0 — Bridge Architecture with Long-Context Support.
 
 MCP Server is a BRIDGE between AI Agents and Skills.
 It does NOT call any LLM. It only:
@@ -6,6 +6,14 @@ It does NOT call any LLM. It only:
   2. Parses LLM responses from Agent → returns structured data
   3. Builds formatted reports from structured data
   4. Manages Skill discovery, pipeline definitions, and Skill file updates
+  5. Provides token estimation, material compaction, and pipeline state management
+
+v0.5.0 changes (inspired by claude-code's long-context handling):
+  - estimate_tokens: let Agent budget before calling render_skill
+  - plan_pipeline: returns metadata only (NOT full prompts) to avoid context overflow
+  - compact_materials: compress case materials to fit token budget
+  - pipeline state: track progress, support resume from breakpoint
+  - render_skill: unchanged, but Agent should call one-at-a-time
 
 Agent decides what to call, in what order, with what parameters.
 Agent calls its own LLM with the prompts returned by this server.
@@ -13,6 +21,7 @@ Agent calls its own LLM with the prompts returned by this server.
 
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -35,6 +44,14 @@ _parser = ResponseParser()
 _builder = ReportBuilder()
 _loader = SkillLoader()
 _renderer = TemplateRenderer(_loader)
+
+_pipeline_state: dict[str, dict] = {}
+
+_CHARS_PER_TOKEN = 2.0
+
+
+def _estimate_tokens(text: str) -> int:
+    return int(len(text) / _CHARS_PER_TOKEN)
 
 
 # ── MCP Resources ──────────────────────────────────────────────
@@ -84,12 +101,328 @@ def get_system_resource() -> str:
 
 
 @mcp.tool()
+def estimate_tokens(
+    skill_name: str | None = None,
+    pipeline_name: str | None = None,
+    materials_chars: int = 0,
+) -> str:
+    """预估 Skill 或 Pipeline 的 token 用量，帮助 Agent 做预算决策。
+
+    调用 render_skill 之前先调用此工具，判断是否会超出上下文窗口。
+    如果预估超限，Agent 应使用 compact_materials 压缩材料后再调用 render_skill。
+
+    skill_name: 单个 Skill 名称（如 'dimensions/02_evidence'）
+    pipeline_name: 流水线名称（如 'full_scan'），与 skill_name 二选一
+    materials_chars: 案件材料的字符数（用于估算变量注入后的总 token）
+
+    返回 JSON 字符串，包含：
+    - estimated_tokens: 预估总 token 数
+    - breakdown: 分项 token 估算（system_prompt, user_prompt_template, materials）
+    - fits_in_128k / fits_in_200k: 是否适配常见上下文窗口
+    - recommendation: 建议操作（'proceed' / 'compact_materials' / 'use_skill_by_skill'）
+    """
+    try:
+        breakdown = {
+            "system_prompt": 0,
+            "user_prompt_template": 0,
+            "materials": _estimate_tokens(" " * materials_chars) if materials_chars else 0,
+        }
+
+        if pipeline_name:
+            _, pipeline_body = _loader.load(f"pipelines/{pipeline_name}")
+            skill_refs = _parse_pipeline_skills(pipeline_body)
+            total_sys = 0
+            total_user = 0
+            for ref in skill_refs:
+                try:
+                    meta, body = _loader.load(ref)
+                    sys_prompt = _build_system_prompt(meta)
+                    total_sys += len(sys_prompt)
+                    total_user += len(body)
+                except FileNotFoundError:
+                    pass
+            breakdown["system_prompt"] = _estimate_tokens(" " * total_sys)
+            breakdown["user_prompt_template"] = _estimate_tokens(" " * total_user)
+            breakdown["skill_count"] = len(skill_refs)
+
+        elif skill_name:
+            meta, body = _loader.load(skill_name)
+            sys_prompt = _build_system_prompt(meta)
+            breakdown["system_prompt"] = _estimate_tokens(sys_prompt)
+            breakdown["user_prompt_template"] = _estimate_tokens(body)
+
+        total_tokens = sum(v for v in breakdown.values() if isinstance(v, int))
+
+        fits_128k = total_tokens < 120_000
+        fits_200k = total_tokens < 190_000
+
+        if not fits_128k:
+            recommendation = "use_skill_by_skill"
+        elif total_tokens > 80_000:
+            recommendation = "compact_materials"
+        else:
+            recommendation = "proceed"
+
+        result = {
+            "estimated_tokens": total_tokens,
+            "breakdown": breakdown,
+            "fits_in_128k": fits_128k,
+            "fits_in_200k": fits_200k,
+            "recommendation": recommendation,
+        }
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    except Exception as e:
+        logger.error("estimate_tokens: %s", e, exc_info=True)
+        return json.dumps({"error": f"估算异常：{e}"}, ensure_ascii=False)
+
+
+@mcp.tool()
+def compact_materials(
+    materials: str,
+    max_tokens: int = 40000,
+    strategy: str = "extract_key_facts",
+) -> str:
+    """压缩案件材料以适配 token 预算。
+
+    当案件材料过长时，Agent 应先调用此工具压缩材料，
+    再将压缩结果作为 render_skill 的 variables.materials 传入。
+
+    materials: 原始案件材料文本
+    max_tokens: 压缩后的目标 token 数（默认 40000，约 80000 字符）
+    strategy: 压缩策略
+      - 'extract_key_facts': 提取关键事实和争议焦点（默认，适合检测用）
+      - 'truncate': 简单截断到目标长度
+      - 'outline': 保留文档结构大纲，删除详细内容
+
+    返回 JSON 字符串，包含：
+    - compacted: 压缩后的文本
+    - original_tokens: 原始 token 估算
+    - compacted_tokens: 压缩后 token 估算
+    - compression_ratio: 压缩比
+    - strategy_used: 实际使用的策略
+    """
+    try:
+        original_tokens = _estimate_tokens(materials)
+        max_chars = int(max_tokens * _CHARS_PER_TOKEN)
+
+        if original_tokens <= max_tokens:
+            return json.dumps({
+                "compacted": materials,
+                "original_tokens": original_tokens,
+                "compacted_tokens": original_tokens,
+                "compression_ratio": 1.0,
+                "strategy_used": "none_needed",
+            }, ensure_ascii=False)
+
+        if strategy == "truncate":
+            compacted = materials[:max_chars]
+
+        elif strategy == "outline":
+            compacted = _outline_compact(materials, max_chars)
+
+        else:
+            compacted = _extract_key_facts(materials, max_chars)
+
+        compacted_tokens = _estimate_tokens(compacted)
+        ratio = compacted_tokens / original_tokens if original_tokens > 0 else 1.0
+
+        result = {
+            "compacted": compacted,
+            "original_tokens": original_tokens,
+            "compacted_tokens": compacted_tokens,
+            "compression_ratio": round(ratio, 2),
+            "strategy_used": strategy,
+        }
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    except Exception as e:
+        logger.error("compact_materials: %s", e, exc_info=True)
+        return json.dumps({"error": f"压缩异常：{e}"}, ensure_ascii=False)
+
+
+@mcp.tool()
+def plan_pipeline(
+    pipeline_name: str,
+    variables: dict | None = None,
+) -> str:
+    """规划流水线执行计划，返回 Skill 元数据列表（不含完整提示词）。
+
+    v0.5.0: 替代旧版 render_pipeline（会一次性返回所有 Skill 的完整提示词，
+    导致长上下文溢出）。Agent 应根据此计划逐个调用 render_skill。
+
+    pipeline_name: 流水线名称（如 'full_scan'、'evidence_focus'、'quick_scan'）
+    variables: 全局模板变量字典的 keys（仅用于估算，不传值）
+        如 {"materials": "", "previous_results": ""}
+
+    返回 JSON 字符串，包含：
+    - pipeline: 流水线名称
+    - skills: 按顺序排列的 Skill 元数据（skill_name, skill_title, meta, estimated_tokens）
+    - total_skills: Skill 总数
+    - total_estimated_tokens: 预估总 token 数
+    - execution_hint: 执行建议（'one_by_one' / 'batch_3' / 'batch_5'）
+    - session_id: 流水线会话 ID（用于 pipeline_state）
+    """
+    try:
+        logger.info("plan_pipeline: 开始 pipeline=%s", pipeline_name)
+        _, pipeline_body = _loader.load(f"pipelines/{pipeline_name}")
+        skill_refs = _parse_pipeline_skills(pipeline_body)
+        logger.info("plan_pipeline: 解析到 %d 个 skill", len(skill_refs))
+
+        skills_plan = []
+        total_tokens = 0
+
+        for ref in skill_refs:
+            try:
+                meta, body = _loader.load(ref)
+                sys_prompt = _build_system_prompt(meta)
+                skill_tokens = _estimate_tokens(sys_prompt) + _estimate_tokens(body)
+                total_tokens += skill_tokens
+
+                skills_plan.append({
+                    "skill_name": meta.name,
+                    "skill_title": meta.title,
+                    "meta": {
+                        "type": meta.type,
+                        "layer": meta.layer,
+                        "order": meta.order,
+                        "depends_on": meta.depends_on,
+                        "output_format": meta.output_format,
+                    },
+                    "estimated_tokens": skill_tokens,
+                })
+            except FileNotFoundError:
+                logger.warning("plan_pipeline: Skill 未找到 ref=%s", ref)
+                skills_plan.append({
+                    "skill_name": ref,
+                    "skill_title": "",
+                    "meta": {},
+                    "estimated_tokens": 0,
+                    "error": "Skill 未找到",
+                })
+
+        if total_tokens > 100_000:
+            execution_hint = "one_by_one"
+        elif total_tokens > 50_000:
+            execution_hint = "batch_3"
+        else:
+            execution_hint = "batch_5"
+
+        session_id = datetime.now().strftime("%Y%m%d%H%M%S")
+        _pipeline_state[session_id] = {
+            "pipeline": pipeline_name,
+            "skills": skill_refs,
+            "completed": [],
+            "current_index": 0,
+            "results": {},
+        }
+
+        result = {
+            "pipeline": pipeline_name,
+            "skills": skills_plan,
+            "total_skills": len(skills_plan),
+            "total_estimated_tokens": total_tokens,
+            "execution_hint": execution_hint,
+            "session_id": session_id,
+        }
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    except FileNotFoundError as e:
+        logger.error("plan_pipeline: %s", e)
+        return json.dumps({"error": f"流水线不存在：{e}"}, ensure_ascii=False)
+    except Exception as e:
+        logger.error("plan_pipeline: %s", e, exc_info=True)
+        return json.dumps({"error": f"规划异常：{e}"}, ensure_ascii=False)
+
+
+@mcp.tool()
+def pipeline_progress(
+    session_id: str,
+    action: str = "status",
+    skill_name: str | None = None,
+    result_summary: str | None = None,
+) -> str:
+    """管理流水线执行进度，支持断点续传。
+
+    Agent 在每个 Skill 执行完成后应调用此工具更新进度。
+    如果中途断开，可通过 action='resume' 获取未完成的 Skill 列表。
+
+    session_id: 流水线会话 ID（由 plan_pipeline 返回）
+    action: 操作类型
+      - 'status': 查询当前进度（默认）
+      - 'complete': 标记一个 Skill 为已完成
+      - 'resume': 获取未完成的 Skill 列表（断点续传）
+      - 'reset': 重置流水线进度
+    skill_name: 要标记完成的 Skill 名称（action='complete' 时必填）
+    result_summary: 该 Skill 的执行结果摘要（可选，用于断点续传时恢复上下文）
+
+    返回 JSON 字符串，包含：
+    - session_id: 会话 ID
+    - action: 执行的操作
+    - completed_count: 已完成 Skill 数
+    - total_count: 总 Skill 数
+    - progress_pct: 完成百分比
+    - next_skill: 下一个待执行的 Skill 名称（如有）
+    - remaining_skills: 剩余 Skill 列表（action='resume' 时）
+    """
+    try:
+        if session_id not in _pipeline_state:
+            return json.dumps({"error": f"会话不存在：{session_id}"}, ensure_ascii=False)
+
+        state = _pipeline_state[session_id]
+
+        if action == "complete":
+            if not skill_name:
+                return json.dumps({"error": "action='complete' 需要 skill_name"}, ensure_ascii=False)
+            if skill_name not in state["completed"]:
+                state["completed"].append(skill_name)
+            if result_summary:
+                state["results"][skill_name] = result_summary
+            state["current_index"] = min(
+                state["skills"].index(skill_name) + 1 if skill_name in state["skills"] else state["current_index"],
+                len(state["skills"]),
+            )
+            logger.info("pipeline_progress: 完成 skill=%s, 进度=%d/%d", skill_name, len(state["completed"]), len(state["skills"]))
+
+        elif action == "reset":
+            state["completed"] = []
+            state["current_index"] = 0
+            state["results"] = {}
+            logger.info("pipeline_progress: 重置 session=%s", session_id)
+
+        remaining = [s for s in state["skills"] if s not in state["completed"]]
+        next_skill = remaining[0] if remaining else None
+
+        result = {
+            "session_id": session_id,
+            "action": action,
+            "completed_count": len(state["completed"]),
+            "total_count": len(state["skills"]),
+            "progress_pct": round(len(state["completed"]) / len(state["skills"]) * 100) if state["skills"] else 100,
+            "next_skill": next_skill,
+        }
+
+        if action == "resume":
+            result["remaining_skills"] = remaining
+            result["previous_results"] = state.get("results", {})
+
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    except Exception as e:
+        logger.error("pipeline_progress: %s", e, exc_info=True)
+        return json.dumps({"error": f"进度管理异常：{e}"}, ensure_ascii=False)
+
+
+@mcp.tool()
 def render_skill(
     skill_name: str,
     variables: dict | None = None,
 ) -> str:
     """加载并渲染一个 SKILL.md 模板，返回完整的 system_prompt 和 user_prompt，
     供 AI Agent 发送给自己的 LLM。
+
+    建议：先调用 estimate_tokens 检查 token 用量，再调用此工具。
+    对于长材料，先调用 compact_materials 压缩后再传入。
 
     skill_name: Skill 名称（如 'dimensions/02_evidence'、'phases/adversarial'）
     variables: 模板变量字典（如 {"materials": "案件材料文本", "previous_results": "前序结果"}）
@@ -100,6 +433,7 @@ def render_skill(
     - system_prompt: 系统提示词（含术语规范、分类体系、中立性校验、输出格式要求）
     - user_prompt: 用户提示词（渲染后的 SKILL.md 正文）
     - meta: Skill 元数据（type, layer, order, depends_on, output_format）
+    - token_estimate: 预估 token 数
     """
     try:
         logger.info("render_skill: 开始 skill=%s, variables=%s", skill_name, list(variables.keys()) if variables else "None")
@@ -109,6 +443,8 @@ def render_skill(
         logger.info("render_skill: 渲染完成 skill=%s, rendered_len=%d", meta.name, len(rendered))
         system_prompt = _build_system_prompt(meta)
         logger.info("render_skill: 系统提示词构建完成 skill=%s, sys_prompt_len=%d", meta.name, len(system_prompt))
+
+        total_chars = len(system_prompt) + len(rendered)
 
         result = {
             "skill_name": meta.name,
@@ -122,6 +458,7 @@ def render_skill(
                 "depends_on": meta.depends_on,
                 "output_format": meta.output_format,
             },
+            "token_estimate": _estimate_tokens(" " * total_chars),
         }
         return json.dumps(result, ensure_ascii=False, indent=2)
 
@@ -138,24 +475,15 @@ def render_pipeline(
     pipeline_name: str,
     variables: dict | None = None,
 ) -> str:
-    """加载并渲染一个流水线中的所有 SKILL.md 模板，返回每个 Skill 的完整提示词，
-    供 AI Agent 按顺序发送给自己的 LLM。
+    """[已弃用] 请使用 plan_pipeline + render_skill 逐个调用。
+    旧版一次性返回所有 Skill 的完整提示词，长流水线会导致上下文溢出。
 
-    pipeline_name: 流水线名称（如 'full_scan'、'evidence_focus'、'quick_scan'）
-    variables: 全局模板变量字典，会应用到每个 Skill（如 {"materials": "案件材料文本"}）
-
-    返回 JSON 字符串，包含：
-    - pipeline: 流水线名称
-    - skills: 按顺序排列的 Skill 列表，每项包含 skill_name, skill_title, system_prompt, user_prompt, meta
-    - total_skills: Skill 总数
-    - estimated_prompt_chars: 预估提示词总字符数
+    保留此工具仅用于向后兼容。对于超过 5 个 Skill 的流水线，强烈建议使用 plan_pipeline。
     """
     try:
-        logger.info("render_pipeline: 开始 pipeline=%s, variables=%s", pipeline_name, list(variables.keys()) if variables else "None")
+        logger.warning("render_pipeline: 已弃用，建议使用 plan_pipeline + render_skill")
         _, pipeline_body = _loader.load(f"pipelines/{pipeline_name}")
-        logger.info("render_pipeline: 流水线加载成功 pipeline=%s, body_len=%d", pipeline_name, len(pipeline_body))
         skill_refs = _parse_pipeline_skills(pipeline_body)
-        logger.info("render_pipeline: 解析到 %d 个 skill 引用: %s", len(skill_refs), skill_refs)
 
         skills_output = []
         total_chars = 0
@@ -163,11 +491,9 @@ def render_pipeline(
         for ref in skill_refs:
             try:
                 meta, body = _loader.load(ref)
-                logger.info("render_pipeline: 加载 skill=%s, title=%s, body_len=%d", ref, meta.title, len(body))
                 rendered = _renderer.render(body, variables)
                 system_prompt = _build_system_prompt(meta)
                 total_chars += len(system_prompt) + len(rendered)
-                logger.info("render_pipeline: 渲染 skill=%s, sys_len=%d, user_len=%d", ref, len(system_prompt), len(rendered))
 
                 skills_output.append({
                     "skill_name": meta.name,
@@ -183,7 +509,6 @@ def render_pipeline(
                     },
                 })
             except FileNotFoundError:
-                logger.warning("render_pipeline: Skill 未找到 ref=%s", ref)
                 skills_output.append({
                     "skill_name": ref,
                     "skill_title": "",
@@ -198,7 +523,8 @@ def render_pipeline(
             "skills": skills_output,
             "total_skills": len(skills_output),
             "estimated_prompt_chars": total_chars,
-            "estimated_prompt_tokens": int(total_chars * 0.5),
+            "estimated_prompt_tokens": _estimate_tokens(" " * total_chars),
+            "warning": "此工具已弃用，建议使用 plan_pipeline + render_skill 逐个调用以避免上下文溢出",
         }
         return json.dumps(result, ensure_ascii=False, indent=2)
 
@@ -399,6 +725,97 @@ def write_skill(
     except Exception as e:
         logger.error("write_skill: %s", e, exc_info=True)
         return f"# 错误\n写入异常：{e}"
+
+
+# ── Material Compaction Helpers ────────────────────────────────
+
+
+def _extract_key_facts(text: str, max_chars: int) -> str:
+    sections = []
+    current_section = []
+    current_header = ""
+
+    for line in text.split("\n"):
+        if re.match(r"^#{1,4}\s+", line):
+            if current_section:
+                sections.append((current_header, "\n".join(current_section)))
+            current_header = line.strip()
+            current_section = [line]
+        else:
+            current_section.append(line)
+
+    if current_section:
+        sections.append((current_header, "\n".join(current_section)))
+
+    key_patterns = [
+        r"争议焦点|诉讼请求|判决如下|裁定如下|事实认定|证据|原告|被告|上诉|再审",
+        r"劳动合同|工资|赔偿|解除|违法|二倍|经济补偿|混同用工|连带责任",
+        r"举证责任|质证|采信|不予采纳|程序|管辖|送达|回避|期限",
+    ]
+    key_re = re.compile("|".join(key_patterns))
+
+    priority_sections = []
+    other_sections = []
+
+    for header, content in sections:
+        if key_re.search(content):
+            priority_sections.append((header, content))
+        else:
+            other_sections.append((header, content))
+
+    result_parts = []
+    total_len = 0
+
+    for header, content in priority_sections:
+        if total_len + len(content) > max_chars:
+            remaining = max_chars - total_len
+            if remaining > 200:
+                result_parts.append(content[:remaining] + "\n...[已截断]")
+                total_len = max_chars
+            break
+        result_parts.append(content)
+        total_len += len(content)
+
+    if total_len < max_chars * 0.8:
+        for header, content in other_sections:
+            outline = _section_outline(content)
+            if total_len + len(outline) > max_chars:
+                break
+            result_parts.append(outline)
+            total_len += len(outline)
+
+    return "\n\n".join(result_parts)
+
+
+def _outline_compact(text: str, max_chars: int) -> str:
+    lines = text.split("\n")
+    outline_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        if re.match(r"^#{1,4}\s+", stripped):
+            outline_lines.append(stripped)
+        elif re.match(r"^(\d+[\.\)、]|[-*]\s)", stripped):
+            summary = stripped[:120] + ("..." if len(stripped) > 120 else "")
+            outline_lines.append(summary)
+        elif len(stripped) > 0 and stripped[0] in "一二三四五六七八九十":
+            outline_lines.append(stripped[:120] + ("..." if len(stripped) > 120 else ""))
+
+    result = "\n".join(outline_lines)
+    if len(result) > max_chars:
+        result = result[:max_chars] + "\n...[已截断]"
+    return result
+
+
+def _section_outline(content: str) -> str:
+    lines = content.split("\n")
+    header = lines[0] if lines else ""
+    body_lines = [l.strip() for l in lines[1:] if l.strip()]
+    summary_count = min(3, len(body_lines))
+    summary = "\n".join(body_lines[:summary_count])
+    if len(body_lines) > 3:
+        summary += f"\n...[共{len(body_lines)}行，已省略{len(body_lines) - 3}行]"
+    return f"{header}\n{summary}" if header else summary
 
 
 # ── Helper Functions ───────────────────────────────────────────

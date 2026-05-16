@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "judicial-lint-mcp"
-version = "0.4.0"
-description = "MCP Server bridge for AI Agent ↔ Skills (no LLM calls)"
+version = "0.5.0"
+description = "MCP Server bridge for AI Agent ↔ Skills (no LLM calls, with long-context support)"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"

@@ -52,3 +52,9 @@ output/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Generated reports (may contain case data)
+*检测报告*.md
+*检测报告*.json
+test_cases/*/full_report.md
+test_cases/*/evidence_result.md
