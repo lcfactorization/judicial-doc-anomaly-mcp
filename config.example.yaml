@@ -1,0 +1,49 @@
+# judicial-lint-mcp 配置文件示例
+# 复制为 config.yaml 并修改为你的实际配置
+
+llm:
+  # LLM 提供商：openai, deepseek, qwen, zhipu, moonshot
+  provider: "openai"
+  # API Key（也可通过环境变量 LLM_API_KEY 设置）
+  api_key: "your-api-key-here"
+  # API Base URL（可选，非 OpenAI 提供商通常需要设置）
+  # api_base: "https://api.deepseek.com/v1"
+  # 模型名称
+  model: "gpt-4"
+  # 温度（越低越确定）
+  temperature: 0.1
+  # 最大 token 数
+  max_tokens: 8000
+  # 请求超时（秒）
+  timeout: 120
+
+detection:
+  # 检测维度（可选，默认全部）
+  dimensions:
+    - procedure
+    - evidence
+    - fact_finding
+    - law_application
+    - discretion
+    - logic
+    - temporal
+    - semantic_drift
+    - negative_space
+    - case_deviation
+    - procedure_graph
+    - coupling
+  # 启用对抗校验
+  enable_adversarial_check: true
+  # 启用联网检索（需要额外配置）
+  enable_web_search: false
+  # 最大上下文 token 数
+  max_context_tokens: 100000
+  # 每步确认（对抗注意力衰减）
+  step_confirmation: true
+
+# 缓存目录
+cache_dir: ".judicial_lint_cache"
+# 输出目录
+output_dir: "./output"
+# 详细日志
+verbose: false
