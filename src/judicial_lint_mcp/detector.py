@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from .config import AppConfig
 from .graph_builder import GraphBuilder
 from .llm_caller import LLMCaller
-from .prompts import ADVERSARIAL_PROMPT, DIMENSION_PROMPTS, REPORT_TEMPLATE
+from .prompts import ADVERSARIAL_PROMPT, DIMENSION_PROMPTS, REPORT_TEMPLATE, SYSTEM_PROMPT
 from .quality_assessor import QualityAssessor
 from .taxonomy import TAXONOMY, category_from_f_code, dimension_to_categories
 
@@ -79,17 +79,24 @@ class FileLoader:
         if not self.case_dir.exists():
             raise FileNotFoundError(f"Case directory not found: {self.case_dir}")
 
+        skipped = []
         for md_file in self.case_dir.glob("*.md"):
             name_lower = md_file.name.lower()
             if any(kw in name_lower for kw in (
                 "report", "检测报告", "异常检测", "评估报告",
                 "deepseek_markdown", "阅卷",
             )):
+                skipped.append(md_file.name)
+                logger.info("FileLoader: 跳过文件 %s（匹配排除关键词）", md_file.name)
                 continue
             with open(md_file, encoding="utf-8") as f:
                 content = f.read()
             self.files[md_file.stem] = content
+            logger.info("FileLoader: 加载文件 %s（%d 字符）", md_file.name, len(content))
 
+        if skipped:
+            logger.info("FileLoader: 共跳过 %d 个文件: %s", len(skipped), ", ".join(skipped))
+        logger.info("FileLoader: 共加载 %d 个案件材料文件", len(self.files))
         return self.files
 
     def validate(self) -> tuple[float, list[str]]:
@@ -150,29 +157,60 @@ class DetectionEngine:
         )
 
         # Phase 0: Load and validate materials
+        logger.info("=" * 60)
+        logger.info("DetectionEngine.run_detection: 开始检测流程")
+        logger.info("DetectionEngine: 案件目录=%s", case_dir)
+
         self.file_loader = FileLoader(case_dir)
         self.file_loader.load()
         completeness, missing = self.file_loader.validate()
         result.completeness_score = completeness
+        logger.info("DetectionEngine: 材料完整性=%.1f/100, 缺失=%s", completeness, missing)
 
         materials_text = self.file_loader.get_materials_text()
+        logger.info("DetectionEngine: 材料总字符数=%d", len(materials_text))
 
         # Extract case info from materials
         result.case_name = self._extract_case_name(materials_text)
         result.doc_type = self._extract_doc_type(materials_text)
+        logger.info("DetectionEngine: 案件名称=%s, 文书类型=%s", result.case_name, result.doc_type)
 
         dims = dimensions or self.config.detection.dimensions
+        from .prompts import DIMENSION_ORDER, DIMENSION_LABELS
+        logger.info("DetectionEngine: 检测维度列表（%d个）:", len(dims))
+        for i, d in enumerate(dims, 1):
+            label = DIMENSION_LABELS.get(d, d)
+            abs_idx = DIMENSION_ORDER.index(d) + 1 if d in DIMENSION_ORDER else 99
+            layer = ""
+            if abs_idx <= 2:
+                layer = "第一层·形式审查"
+            elif abs_idx <= 6:
+                layer = "第二层·内容审查"
+            elif abs_idx <= 8:
+                layer = "第三层·说理与逻辑"
+            elif abs_idx <= 10:
+                layer = "第四层·时间与过程"
+            else:
+                layer = "第五层·综合评判"
+            logger.info("  D%d %s → %s [%s] (全局序号=%d)", i, d, label, layer, abs_idx)
 
         # Phase 1-4: Run dimension-by-dimension detection
         dimension_results = []
-        for dim in dims:
+        for idx, dim in enumerate(dims, 1):
             if dim not in DIMENSION_PROMPTS:
+                logger.warning("DetectionEngine: 维度 %s 不在 DIMENSION_PROMPTS 中，跳过", dim)
                 continue
 
+            logger.info("-" * 40)
+            logger.info("DetectionEngine: [%d/%d] 开始检测维度 %s", idx, len(dims), dim)
             dim_result = await self._run_dimension(
                 dim, materials_text, dimension_results
             )
             dimension_results.append(dim_result)
+            logger.info(
+                "DetectionEngine: [%d/%d] 维度 %s 检测完成, 异常项=%d, 风险=%s",
+                idx, len(dims), dim, len(dim_result.anomalies), dim_result.risk_level,
+            )
 
             # Step confirmation (anti-attention-decay)
             if self.config.detection.step_confirmation:
@@ -181,15 +219,18 @@ class DetectionEngine:
         result.dimension_results = dimension_results
 
         # Phase 5: Adversarial check
+        logger.info("DetectionEngine: Phase 5 - 对抗校验 (enable=%s)", self.config.detection.enable_adversarial_check)
         if self.config.detection.enable_adversarial_check:
             result.adversarial_results = await self._run_adversarial_check(
                 dimension_results
             )
 
         # Phase 6: Coupling analysis
+        logger.info("DetectionEngine: Phase 6 - 耦合分析")
         result.coupling_analysis = await self._run_coupling_analysis(dimension_results)
 
         # Phase 7: Quality assessment
+        logger.info("DetectionEngine: Phase 7 - 质量评估 (enable=%s)", self.config.detection.enable_quality_assessment)
         if self.config.detection.enable_quality_assessment:
             try:
                 quality_result = await self._run_quality_assessment(
@@ -197,27 +238,33 @@ class DetectionEngine:
                 )
                 result.quality_score_table = quality_result
             except Exception as e:
+                logger.error("DetectionEngine: 质量评估失败: %s", e, exc_info=True)
                 result.quality_score_table = f"质量评估执行失败：{e}"
 
         # Phase 8: Graph building
+        logger.info("DetectionEngine: Phase 8 - 图构建 (enable=%s)", self.config.detection.enable_graph_building)
         if self.config.detection.enable_graph_building:
             try:
                 graph_result = await self._run_graph_building(materials_text)
                 result.mermaid_graph = graph_result
             except Exception as e:
+                logger.error("DetectionEngine: 图构建失败: %s", e, exc_info=True)
                 result.mermaid_graph = f"图构建执行失败：{e}"
 
         # Calculate overall risk level
         result.risk_level, result.risk_reason = self._calculate_risk_level(
             dimension_results
         )
+        logger.info("DetectionEngine: 综合风险等级=%s, 理由=%s", result.risk_level, result.risk_reason[:100])
 
         # Generate remedies
         result.remedies = self._generate_remedies(dimension_results)
 
         # Generate report
         result.total_tokens_used = self.total_tokens_used
-        result.report_markdown = self._generate_report(result)
+        result.report_markdown = await self._generate_report(result)
+        logger.info("DetectionEngine: 报告生成完成, 总字符数=%d, 总token=%d", len(result.report_markdown), result.total_tokens_used)
+        logger.info("=" * 60)
 
         return result
 
@@ -228,6 +275,11 @@ class DetectionEngine:
         previous_results: list[DimensionResult],
     ) -> DimensionResult:
         """Run single dimension detection"""
+        from .prompts import DIMENSION_LABELS
+        dim_label = DIMENSION_LABELS.get(dim, dim)
+        logger.info("_run_dimension: 维度 %s (%s), 材料长度=%d, 前序结果=%d个",
+                     dim, dim_label, len(materials), len(previous_results))
+
         prompt_template = DIMENSION_PROMPTS[dim]
 
         # Build context from previous results (anti-attention-decay)
@@ -251,7 +303,25 @@ class DetectionEngine:
             "previous_results": materials + context,
         }
         user_prompt = prompt_template.format(**fmt_kwargs)
-        system_prompt = "你是专业的司法文书审查专家，请严格按照检测要求进行系统性审查。"
+        system_prompt = (
+            SYSTEM_PROMPT + "\n\n"
+            "## 输出格式要求（必须严格遵守）\n"
+            "对每个检测到的异常项，必须使用以下格式：\n\n"
+            "#### 1. 异常项：[异常项名称]\n\n"
+            "- 具体表现：[详细描述，引用原文段落并标注页码/段落/行号，内容必须完整不得省略]\n"
+            "- 原文引用：[判决书原文，完整引用不得截断]\n"
+            "- 指向获益方：[原告/被告/双方/无]\n"
+            "- 异常程度：[疑似/可能/高度可能/确定]\n"
+            "- 法理分析：[详细分析，引用具体法条原文，论证必须完整不得省略]\n\n"
+            "注意事项：\n"
+            "1. 每个异常项必须以'#### 序号. 异常项：'开头\n"
+            "2. 具体表现和法理分析必须完整输出，不得用省略号或'略'代替\n"
+            "3. 原文引用必须完整，不得截断\n"
+            "4. 不要在开头添加角色扮演类语句（如'好的，作为专业的...'）\n"
+            "5. 不要输出'总结'或'综合结论'作为单独的异常项\n"
+            "6. 证据描述必须明确标注提交方（如'原告提交的录音证据5'）\n"
+            "7. 所有当事人称谓必须使用一审术语\n"
+        )
 
         response, usage = await self.llm.acall(system_prompt, user_prompt)
         self.total_tokens_used += usage.get("total_tokens", 0)
@@ -498,19 +568,22 @@ class DetectionEngine:
     _RISK_CN = {"low": "🟢 低风险", "medium": "🟡 中风险", "high": "🟠 高风险", "critical": "🔴 极高风险"}
     _RISK_CN_SHORT = {"low": "低", "medium": "中", "high": "高", "critical": "极高"}
 
-    def _generate_report(self, result: DetectionResult) -> str:
+    async def _generate_report(self, result: DetectionResult) -> str:
+        logger.info("_generate_report: 开始生成报告, 维度数=%d", len(result.dimension_results))
+
         seq = 0
         table_rows = []
         for r in result.dimension_results:
             dim_cn = self._dim_label(r.dimension)
             for a in r.anomalies:
                 seq += 1
-                desc_short = a.description[:80].replace("\n", " ").replace("|", "／")
+                desc_raw = a.description.replace("\n", " ").replace("|", "／")
+                desc_short = await self._smart_compress(desc_raw, 800)
                 beneficiary = a.beneficiary or "—"
                 a_code = a.a_code or "—"
                 conf_cn = self._CONFIDENCE_CN.get(a.confidence, a.confidence)
                 table_rows.append(
-                    f"| {seq} | {dim_cn} | {a.item_name[:30]} | {desc_short} | "
+                    f"| {seq} | {dim_cn} | {a.item_name[:60]} | {desc_short} | "
                     f"{beneficiary} | {a_code} | {conf_cn} |"
                 )
 
@@ -541,28 +614,40 @@ class DetectionEngine:
                 dimension_details += "|:---:|:---|:---|:---:|:---:|:---:|:---|\n"
                 for i, a in enumerate(r.anomalies, 1):
                     conf_cn = self._CONFIDENCE_CN.get(a.confidence, a.confidence)
-                    desc_cell = a.description[:60].replace("\n", " ").replace("|", "／")
+                    desc_raw = a.description.replace("\n", " ").replace("|", "／")
+                    desc_cell = await self._smart_compress(desc_raw, 600)
                     dimension_details += (
-                        f"| {i} | {a.item_name[:25]} | {a.beneficiary or '—'} | "
+                        f"| {i} | {a.item_name[:60]} | {a.beneficiary or '—'} | "
                         f"{a.a_code or '—'} | {a.f_code or '—'} | {conf_cn} | {desc_cell} |\n"
                     )
                 dimension_details += "\n"
 
                 if r.risk_level in ("high", "critical"):
-                    dim_summary = r.summary[:200].replace("\n", " ") if r.summary else ""
-                    dimension_details += f"> [!WARNING]\n"
-                    dimension_details += f"> 本维度存在 {len(r.anomalies)} 项异常，风险等级{risk_cn}。{dim_summary}\n\n"
+                    dim_summary = r.summary[:300] if r.summary else ""
+                    dim_summary = re.sub(r'[#*]', '', dim_summary).strip()
+                    dim_summary = re.sub(r'^维度[一二三四五六七八九十]+[：:]\s*', '', dim_summary)
+                    dim_summary = re.sub(r'^(审查报告|检测报告|总结|综合结论)[：:]*\s*', '', dim_summary)
+                    dim_summary = dim_summary.replace("\n", " ")
+                    if dim_summary:
+                        dimension_details += f"> [!WARNING]\n"
+                        dimension_details += f"> 本维度存在 {len(r.anomalies)} 项异常，风险等级{risk_cn}。{dim_summary}\n\n"
 
                 for i, a in enumerate(r.anomalies, 1):
                     dimension_details += f"\n**{i}. {a.item_name}**\n\n"
+                    desc_has_original = False
+                    desc_has_analysis = False
                     if a.description:
-                        dimension_details += f"- **具体表现**：{a.description[:300]}\n"
-                    if a.original_text:
-                        original_short = a.original_text[:200].replace("\n", " ")
-                        dimension_details += f"- **原文引用**：> {original_short}\n"
-                    if a.legal_analysis:
-                        legal_short = a.legal_analysis[:300].replace("\n", " ")
-                        dimension_details += f"- **法理分析**：{legal_short}\n"
+                        desc_lower = a.description[:200]
+                        if a.original_text and a.original_text[:50] in a.description:
+                            desc_has_original = True
+                        if a.legal_analysis and a.legal_analysis[:50] in a.description:
+                            desc_has_analysis = True
+                        dimension_details += f"- **具体表现**：{a.description}\n"
+                    if a.original_text and not desc_has_original:
+                        original_text = a.original_text.replace("\n", "\n> ")
+                        dimension_details += f"- **原文引用**：\n> {original_text}\n"
+                    if a.legal_analysis and not desc_has_analysis:
+                        dimension_details += f"- **法理分析**：{a.legal_analysis}\n"
                     dimension_details += "\n"
             else:
                 dimension_details += "✅ 本维度未发现显著异常。\n\n"
@@ -619,6 +704,10 @@ class DetectionEngine:
         return DIMENSION_LABELS.get(dim, dim)
 
     def _parse_dimension_result(self, dim: str, response: str) -> DimensionResult:
+        from .prompts import DIMENSION_LABELS
+        dim_label = DIMENSION_LABELS.get(dim, dim)
+        logger.info("_parse_dimension_result: 解析维度 %s (%s), 响应长度=%d", dim, dim_label, len(response))
+
         result = DimensionResult(dimension=dim)
 
         dim_categories = dimension_to_categories(
@@ -638,18 +727,30 @@ class DetectionEngine:
             if not section or len(section) < 20:
                 continue
 
+            first_line_clean = re.sub(r'[#*]', '', section.split("\n")[0]).strip()
+            if re.match(r'^(总结|综合结论|总体评价|审查报告$|建议$)', first_line_clean):
+                logger.debug("_parse_dimension_result: 跳过非异常项段落: %s", first_line_clean[:30])
+                continue
+
             anomaly = AnomalyItem(dimension=dim)
 
             header_match = re.match(r"异常项[：:]\s*(.+?)(?:\*?\*?\s*$)", section)
             if header_match:
                 anomaly.item_name = header_match.group(1).strip().rstrip("*").strip()
             else:
-                first_line = section.split("\n")[0].strip().rstrip("*").strip()
+                first_line = section.split("\n")[0].strip()
+                first_line = re.sub(r'^[#*]+\s*', '', first_line)
+                first_line = re.sub(r'\*+$', '', first_line).strip()
+                first_line = re.sub(r'^维度[一二三四五六七八九十]+[：:]\s*', '', first_line)
+                first_line = re.sub(r'^异常项[：:]\s*', '', first_line)
+                first_line = re.sub(r'^\d+[\.、]\s*', '', first_line)
+                if re.match(r'^(总结|综合结论|总体评价|审查报告)', first_line):
+                    first_line = first_line.rstrip('报告').strip()
                 anomaly.item_name = first_line[:60]
 
-            anomaly.description = self._extract_field(section, r"具体表现\*?\*?[：:]", 800)
+            anomaly.description = self._extract_field(section, r"具体表现\*?\*?[：:]", 3000)
             if not anomaly.description:
-                anomaly.description = self._extract_field(section, r"异常表现\*?\*?[：:]", 800)
+                anomaly.description = self._extract_field(section, r"异常表现\*?\*?[：:]", 3000)
 
             meta = self._parse_meta_line(section)
             if meta.get("confidence"):
@@ -658,17 +759,20 @@ class DetectionEngine:
                 confidence_text = self._extract_field(section, r"异常程度\*?\*?[：:]", 100)
                 anomaly.confidence = self._map_confidence(confidence_text)
 
-            anomaly.legal_analysis = self._extract_field(section, r"法理分析\*?\*?[：:]", 600)
+            anomaly.legal_analysis = self._extract_field(section, r"法理分析\*?\*?[：:]", 3000)
 
-            anomaly.original_text = self._extract_field(section, r"原文(?:引用|定位)\*?\*?[：:]", 400)
+            anomaly.original_text = self._extract_field(section, r"原文(?:引用|定位)\*?\*?[：:]", 2000)
 
             if meta.get("beneficiary"):
-                anomaly.beneficiary = self._normalize_beneficiary(meta["beneficiary"])
+                raw_beneficiary = meta["beneficiary"]
+                anomaly.beneficiary = self._normalize_beneficiary(raw_beneficiary)
+                logger.debug("  获益方(meta): raw='%s' → normalized='%s'", raw_beneficiary[:50], anomaly.beneficiary)
             else:
-                beneficiary_text = self._extract_field(section, r"(?:指向)?获益方\*?\*?[：:]", 100)
+                beneficiary_text = self._extract_field(section, r"(?:指向)?获益方\*?\*?[：:]", 200)
                 anomaly.beneficiary = self._normalize_beneficiary(
                     beneficiary_text or self._infer_beneficiary(section)
                 )
+                logger.debug("  获益方(field): raw='%s' → normalized='%s'", (beneficiary_text or "")[:50], anomaly.beneficiary)
 
             if meta.get("f_code"):
                 anomaly.f_code = meta["f_code"]
@@ -694,7 +798,16 @@ class DetectionEngine:
             ))
 
         paragraphs = [p.strip() for p in response.split("\n\n") if p.strip()]
-        result.summary = paragraphs[0][:300] if paragraphs else response[:200]
+        summary_candidates = []
+        for p in paragraphs:
+            cleaned = re.sub(r'[#*]', '', p).strip()
+            if re.match(r'^(好的|作为|我将|我已|以下是|根据|基于|经检测|经审查)', cleaned):
+                continue
+            if len(cleaned) < 20:
+                continue
+            summary_candidates.append(p)
+            break
+        result.summary = summary_candidates[0][:300] if summary_candidates else (paragraphs[0][:300] if paragraphs else response[:200])
 
         high_count = sum(1 for a in result.anomalies if a.confidence == "high")
         if high_count >= 3:
@@ -704,9 +817,16 @@ class DetectionEngine:
         elif result.anomalies:
             result.risk_level = "medium"
 
+        logger.info("_parse_dimension_result: 维度 %s 解析完成, 异常项=%d, 风险=%s",
+                     dim, len(result.anomalies), result.risk_level)
+        for a in result.anomalies:
+            logger.debug("  异常项: %s (置信度=%s, 获益方=%s, F码=%s, A码=%s)",
+                         a.item_name[:40], a.confidence, a.beneficiary, a.f_code, a.a_code)
+
         return result
 
     _FIELD_BOUNDARY = r"\n\*\s+\*\*"
+    _FIELD_BOUNDARY_ALT = r"\n-\s+\*\*(?:原文引用|原文定位|指向获益方|获益方|异常程度|置信度|法理分析|具体表现|异常表现)"
 
     def _parse_meta_line(self, text: str) -> dict:
         """Parse metadata lines like:
@@ -715,8 +835,10 @@ class DetectionEngine:
         *   **指向获益方**：被上诉人（...）
         """
         result = {}
-        for line in text.split("\n")[:10]:
+        for line in text.split("\n"):
             line = line.strip()
+            if not line:
+                continue
             a_m = re.search(r"\*\*A分类\*\*[：:]\s*(\S+)", line)
             if a_m:
                 result["a_code"] = a_m.group(1).strip()
@@ -729,17 +851,21 @@ class DetectionEngine:
             b_m = re.search(r"\*\*(?:指向)?获益方\*\*[：:]\s*(.+?)(?:\*\*|\n|$)", line)
             if b_m:
                 result["beneficiary"] = b_m.group(1).strip()
+            b_m2 = re.search(r"-\s+\*?\*?(?:指向)?获益方\*?\*?[：:]\s*(.+?)(?:\*?\*?|\n|$)", line)
+            if b_m2 and "beneficiary" not in result:
+                result["beneficiary"] = b_m2.group(1).strip()
         return result
 
-    def _extract_field(self, text: str, pattern: str, max_len: int = 500) -> str:
+    def _extract_field(self, text: str, pattern: str, max_len: int = 2000) -> str:
+        boundary = rf"(?={self._FIELD_BOUNDARY}|{self._FIELD_BOUNDARY_ALT}|\n####|\n###|\Z)"
         m = re.search(
-            rf"{pattern}\s*\n?(.+?)(?={self._FIELD_BOUNDARY}|\n####|\n###|\Z)",
+            rf"{pattern}\s*\n?(.+?){boundary}",
             text,
             re.DOTALL,
         )
         if not m:
             m = re.search(
-                rf"{pattern}\s*(.+?)(?={self._FIELD_BOUNDARY}|\n####|\n###|\Z)",
+                rf"{pattern}\s*(.+?){boundary}",
                 text,
                 re.DOTALL,
             )
@@ -750,6 +876,36 @@ class DetectionEngine:
             value = re.sub(r"\n{3,}", "\n\n", value)
             return value[:max_len]
         return ""
+
+    async def _smart_compress(self, text: str, max_chars: int = 300) -> str:
+        if len(text) <= max_chars:
+            return text
+        if len(text) <= max_chars * 2:
+            return text[:max_chars]
+        try:
+            prompt = (
+                f"请将以下司法分析文本压缩到{max_chars}字以内，"
+                f"保留核心论点、关键证据引用和法条引用，"
+                f"去除冗余表述，保持逻辑连贯：\n\n{text}"
+            )
+            messages = [
+                {"role": "system", "content": "你是专业的司法文书摘要专家，擅长在保留核心内容的前提下压缩文本。"},
+                {"role": "user", "content": prompt},
+            ]
+            compressed, _ = await self.llm.call(
+                messages, temperature=0.1, max_tokens=max_chars
+            )
+            compressed = compressed.strip()
+            if compressed and len(compressed) < len(text):
+                logger.info(
+                    "_smart_compress: 压缩 %d→%d 字符",
+                    len(text),
+                    len(compressed),
+                )
+                return compressed
+        except Exception as e:
+            logger.warning("_smart_compress: 压缩失败，回退到截断: %s", e)
+        return text[:max_chars]
 
     def _map_confidence(self, text: str) -> str:
         if not text:
@@ -769,23 +925,31 @@ class DetectionEngine:
         if not text:
             return ""
         t = text.strip()
-        if any(kw in t for kw in ["原告", "上诉人", "劳动者", "员工", "职工", "申请人"]):
-            return "原告/上诉人"
-        if any(kw in t for kw in ["被告", "被上诉人", "用人单位", "公司", "单位", "被申请人"]):
-            return "被告/被上诉人"
-        if "双方" in t or "均" in t:
+        defendant_kw = ["被告", "被上诉人", "用人单位", "公司方", "资方", "被申请人"]
+        plaintiff_kw = ["原告", "上诉人", "劳动者", "员工", "职工", "申请人", "劳工"]
+        has_defendant = any(kw in t for kw in defendant_kw)
+        has_plaintiff = any(kw in t for kw in plaintiff_kw)
+        if has_defendant and not has_plaintiff:
+            return "被告"
+        if has_plaintiff and not has_defendant:
+            return "原告"
+        if has_defendant and has_plaintiff:
             return "双方"
+        if "双方" in t or "均" in t or "两方" in t:
+            return "双方"
+        if "无" in t or "不确定" in t:
+            return "无"
         return t[:20]
 
     def _infer_beneficiary(self, text: str) -> str:
-        plaintiff_kw = ["对原告不利", "损害劳动者", "侵害员工", "偏袒被告", "偏袒用人单位", "偏袒公司"]
-        defendant_kw = ["对被告不利", "偏袒原告", "偏袒劳动者"]
-        for kw in plaintiff_kw:
+        plaintiff_harmed_kw = ["对原告不利", "损害劳动者", "侵害员工", "偏袒被告", "偏袒用人单位", "偏袒公司", "原告权利受损"]
+        defendant_harmed_kw = ["对被告不利", "偏袒原告", "偏袒劳动者", "被告权利受损"]
+        for kw in plaintiff_harmed_kw:
             if kw in text:
-                return "被告/被上诉人"
-        for kw in defendant_kw:
+                return "被告"
+        for kw in defendant_harmed_kw:
             if kw in text:
-                return "原告/上诉人"
+                return "原告"
         return ""
 
     def _infer_f_code(self, text: str) -> str:
@@ -851,6 +1015,13 @@ class DetectionEngine:
             line = line.strip()
             if "案号" in line and len(line) < 80:
                 return line
+        m = re.search(r"[(（]\d{4}[)）].*?民[^\s]*?\d+\s*号", materials)
+        if m:
+            matched = m.group(0)
+            ctx_start = max(0, m.start() - 40)
+            ctx = materials[ctx_start:m.end() + 10]
+            if any(kw in ctx for kw in ["判决书", "裁定书", "本案", "原告", "被告", "上诉人", "被上诉人"]):
+                return matched
         m = re.search(r"[(（]\d{4}[)）].+?\d+\s*号", materials)
         if m:
             ctx_start = max(0, m.start() - 40)

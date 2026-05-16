@@ -5,6 +5,7 @@ evidence indexing, and claims mapping.
 """
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,8 @@ from pathlib import Path
 from .config import MATERIAL_PRIORITY
 from .llm_caller import LLMCaller
 from .prompts import PREPROCESSOR_PROMPT
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -75,6 +78,7 @@ class Preprocessor:
         case_path = Path(case_dir)
         if not case_path.exists():
             return materials
+        skipped = []
         for file_path in sorted(case_path.rglob("*")):
             if file_path.is_file() and file_path.suffix.lower() in (
                 ".md",
@@ -86,12 +90,18 @@ class Preprocessor:
                     "report", "检测报告", "异常检测", "评估报告",
                     "deepseek_markdown", "阅卷",
                 )):
+                    skipped.append(file_path.name)
+                    logger.info("Preprocessor: 跳过文件 %s（匹配排除关键词）", file_path.name)
                     continue
                 try:
                     content = file_path.read_text(encoding="utf-8")
                     materials[file_path.name] = content
+                    logger.info("Preprocessor: 加载材料 %s（%d 字符）", file_path.name, len(content))
                 except Exception:
                     pass
+        if skipped:
+            logger.info("Preprocessor: 共跳过 %d 个文件: %s", len(skipped), ", ".join(skipped))
+        logger.info("Preprocessor: 共加载 %d 个案件材料", len(materials))
         return materials
 
     def _calculate_completeness(self, materials: dict[str, str]) -> float:
@@ -150,9 +160,15 @@ class Preprocessor:
 
         for name in materials:
             if "上诉状" in name:
+                logger.info("Preprocessor: 检测到上诉状 '%s'，视为原告判后补充说明处理", name)
                 materials[name] = (
-                    "【说明：以下上诉状在本检测中视为原告答辩意见，"
-                    "仅用于补充事实和证据，忽略其中对一审判决的驳斥和日期矛盾。】\n"
+                    "【重要说明：以下文件名为'上诉状'，但在本检测中仅作为原告的判后补充说明使用，"
+                    "相当于原告对一审判决的答疑和补充陈述。\n"
+                    "阅读本文件时必须遵守以下规则：\n"
+                    "1. 文件中的'上诉人'即一审'原告'，'被上诉人'即一审'被告'\n"
+                    "2. 分析时必须使用一审术语（原告/被告），严禁使用二审术语（上诉人/被上诉人）\n"
+                    "3. 本文件中提及的证据编号和证据内容，应结合证据清单确认归属方\n"
+                    "4. 本文件中对一审判决的驳斥和日期矛盾部分可忽略，仅提取事实和证据补充信息】\n"
                     + materials[name]
                 )
 
