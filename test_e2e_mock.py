@@ -16,9 +16,9 @@ async def test_generate_report():
 
     case_info = CaseInfo(
         case_number="(2024)粤01民初123号",
-        case_name="张三诉李四劳动争议",
+        case_name="张某诉李某劳动争议",
         case_type="民事判决书",
-        parties=["张三", "李四"],
+        parties=["张某", "李某"],
     )
     timeline = [
         TimelineEntry(date="2024-01-15", event="立案受理", source="案卷"),

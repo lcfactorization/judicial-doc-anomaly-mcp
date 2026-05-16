@@ -45,53 +45,69 @@ def _make_llm_caller(config: AppConfig) -> LLMCaller:
 
 @mcp.resource("judicial-lint://taxonomy")
 def get_taxonomy_resource() -> str:
-    lines = ["# 异常分类体系（A系列编号）\n"]
-    for cat in TAXONOMY:
-        lines.append(f"## {cat.code} {cat.label}")
-        lines.append(f"- 描述：{cat.description}")
-        lines.append(f"- 关联维度：{', '.join(f'D{d}' for d in cat.dimensions)}")
-        lines.append(f"- 关联F编号：{', '.join(cat.f_codes)}")
-        lines.append(f"- 基础严重度：{cat.severity_base}")
-        lines.append(f"- 双向适用：{'是' if cat.bidirectional else '否'}")
-        lines.append("")
-    return "\n".join(lines)
+    try:
+        lines = ["# 异常分类体系（A系列编号）\n"]
+        for cat in TAXONOMY:
+            lines.append(f"## {cat.code} {cat.label}")
+            lines.append(f"- 描述：{cat.description}")
+            lines.append(f"- 关联维度：{', '.join(f'D{d}' for d in cat.dimensions)}")
+            lines.append(f"- 关联F编号：{', '.join(cat.f_codes)}")
+            lines.append(f"- 基础严重度：{cat.severity_base}")
+            lines.append(f"- 双向适用：{'是' if cat.bidirectional else '否'}")
+            lines.append("")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error("taxonomy resource error: %s", e)
+        return f"# 错误\n无法加载分类体系：{e}"
 
 
 @mcp.resource("judicial-lint://neutrality")
 def get_neutrality_resource() -> str:
-    return NEUTRALITY_PROMPT_ADDON
+    try:
+        return NEUTRALITY_PROMPT_ADDON
+    except Exception as e:
+        logger.error("neutrality resource error: %s", e)
+        return f"# 错误\n无法加载中立性机制：{e}"
 
 
 @mcp.resource("judicial-lint://dimensions")
 def get_dimensions_resource() -> str:
-    lines = ["# 十六维检测框架概要\n"]
-    for i, (key, prompt) in enumerate(DIMENSION_PROMPTS.items(), 1):
-        first_line = prompt.strip().split("\n")[0].lstrip("# ").strip()
-        lines.append(f"## D{i} {key}")
-        lines.append(f"- 标题：{first_line}")
-        related = dimension_to_categories(i)
-        if related:
-            lines.append(f"- 关联A分类：{', '.join(c.code for c in related)}")
-        lines.append("")
-    return "\n".join(lines)
+    try:
+        lines = ["# 十六维检测框架概要\n"]
+        for i, (key, prompt) in enumerate(DIMENSION_PROMPTS.items(), 1):
+            first_line = prompt.strip().split("\n")[0].lstrip("# ").strip()
+            lines.append(f"## D{i} {key}")
+            lines.append(f"- 标题：{first_line}")
+            related = dimension_to_categories(i)
+            if related:
+                lines.append(f"- 关联A分类：{', '.join(c.code for c in related)}")
+            lines.append("")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error("dimensions resource error: %s", e)
+        return f"# 错误\n无法加载维度框架：{e}"
 
 
 @mcp.resource("judicial-lint://benchmarks")
 def get_benchmarks_resource() -> str:
-    lines = ["# 基准案例库\n"]
-    for cat_name in ["clearly_anomalous", "high_quality", "borderline"]:
-        cases = get_benchmarks_by_category(cat_name)
-        cat_label = {"clearly_anomalous": "明显异常", "high_quality": "高质量", "borderline": "边界模糊"}[cat_name]
-        lines.append(f"## {cat_label}（{len(cases)}个）\n")
-        for b in cases:
-            lines.append(f"### {b.case_id}")
-            lines.append(f"- 案由：{b.cause}")
-            lines.append(f"- 关键异常：{', '.join(b.key_anomalies) if b.key_anomalies else '无'}")
-            lines.append(f"- 预期等级：{b.expected_grade}")
-            lines.append(f"- 摘要：{b.summary}")
-            lines.append(f"- 判定理由：{b.reasoning}")
-            lines.append("")
-    return "\n".join(lines)
+    try:
+        lines = ["# 基准案例库\n"]
+        for cat_name in ["clearly_anomalous", "high_quality", "borderline"]:
+            cases = get_benchmarks_by_category(cat_name)
+            cat_label = {"clearly_anomalous": "明显异常", "high_quality": "高质量", "borderline": "边界模糊"}[cat_name]
+            lines.append(f"## {cat_label}（{len(cases)}个）\n")
+            for b in cases:
+                lines.append(f"### {b.case_id}")
+                lines.append(f"- 案由：{b.cause}")
+                lines.append(f"- 关键异常：{', '.join(b.key_anomalies) if b.key_anomalies else '无'}")
+                lines.append(f"- 预期等级：{b.expected_grade}")
+                lines.append(f"- 摘要：{b.summary}")
+                lines.append(f"- 判定理由：{b.reasoning}")
+                lines.append("")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error("benchmarks resource error: %s", e)
+        return f"# 错误\n无法加载基准案例库：{e}"
 
 
 # ── MCP Tools ──────────────────────────────────────────────────
@@ -111,8 +127,33 @@ async def detect_anomalies(
 ) -> str:
     """对案件目录下的司法文书进行十六维异常检测、图结构建模、质量评估和对抗审查。
     每个异常点将映射到A1-A8分类体系，并标注指向获益方、反向校验结果和净异常判定。"""
+    try:
+        return await _detect_anomalies_impl(
+            case_dir, dimensions, model, output_format,
+            enable_preprocessing, enable_graph, enable_quality,
+            enable_adversarial, enable_quick_check, config_file,
+        )
+    except FileNotFoundError as e:
+        logger.error("detect_anomalies: 案件目录不存在: %s", e)
+        return f"# 错误\n案件目录不存在：{e}"
+    except Exception as e:
+        logger.error("detect_anomalies: %s", e, exc_info=True)
+        return f"# 错误\n检测过程异常：{e}"
+
+
+async def _detect_anomalies_impl(
+    case_dir: str,
+    dimensions: list[str] | None,
+    model: str | None,
+    output_format: str,
+    enable_preprocessing: bool,
+    enable_graph: bool,
+    enable_quality: bool,
+    enable_adversarial: bool,
+    enable_quick_check: bool,
+    config_file: str | None,
+) -> str:
     arguments = {
-        "case_dir": case_dir, "dimensions": dimensions, "model": model,
         "output_format": output_format, "enable_preprocessing": enable_preprocessing,
         "enable_graph": enable_graph, "enable_quality": enable_quality,
         "enable_adversarial": enable_adversarial, "enable_quick_check": enable_quick_check,
@@ -254,56 +295,77 @@ async def detect_anomalies(
 @mcp.tool()
 async def quality_assessment(case_dir: str, model: str | None = None) -> str:
     """对司法文书进行七维度质量评估打分（A-F等级，100分制）"""
-    config = _load_config({"model": model})
-    llm_caller = _make_llm_caller(config)
+    try:
+        config = _load_config({"model": model})
+        llm_caller = _make_llm_caller(config)
 
-    preprocessor = Preprocessor(llm_caller)
-    preprocess_result = await preprocessor.run(case_dir)
+        preprocessor = Preprocessor(llm_caller)
+        preprocess_result = await preprocessor.run(case_dir)
 
-    assessor = QualityAssessor(llm_caller)
-    quality_result = await assessor.assess(preprocess_result.materials_text)
+        assessor = QualityAssessor(llm_caller)
+        quality_result = await assessor.assess(preprocess_result.materials_text)
 
-    return _format_quality_result(quality_result)
+        return _format_quality_result(quality_result)
+    except FileNotFoundError as e:
+        logger.error("quality_assessment: 案件目录不存在: %s", e)
+        return f"# 错误\n案件目录不存在：{e}"
+    except Exception as e:
+        logger.error("quality_assessment: %s", e, exc_info=True)
+        return f"# 错误\n质量评估异常：{e}"
 
 
 @mcp.tool()
 async def build_graph(case_dir: str, model: str | None = None) -> str:
     """构建案件图结构模型（证据关系图、程序行为图、法律推理图），输出Mermaid可视化"""
-    config = _load_config({"model": model})
-    llm_caller = _make_llm_caller(config)
+    try:
+        config = _load_config({"model": model})
+        llm_caller = _make_llm_caller(config)
 
-    preprocessor = Preprocessor(llm_caller)
-    preprocess_result = await preprocessor.run(case_dir)
+        preprocessor = Preprocessor(llm_caller)
+        preprocess_result = await preprocessor.run(case_dir)
 
-    graph_builder = GraphBuilder(llm_caller, config.graph)
-    graph_result = await graph_builder.run(preprocess_result)
+        graph_builder = GraphBuilder(llm_caller, config.graph)
+        graph_result = await graph_builder.run(preprocess_result)
 
-    return _format_graph_result(graph_result)
+        return _format_graph_result(graph_result)
+    except FileNotFoundError as e:
+        logger.error("build_graph: 案件目录不存在: %s", e)
+        return f"# 错误\n案件目录不存在：{e}"
+    except Exception as e:
+        logger.error("build_graph: %s", e, exc_info=True)
+        return f"# 错误\n图构建异常：{e}"
 
 
 @mcp.tool()
 async def quick_check(case_dir: str, model: str | None = None, document: str | None = None) -> str:
     """快速异常检测：支持26项翻案速查表（传入case_dir）或单文档快速扫描（传入document）。
     检测结果将映射到A1-A8分类体系，并标注指向获益方和反向校验结果。"""
-    config = _load_config({"model": model})
-    llm_caller = _make_llm_caller(config)
+    try:
+        config = _load_config({"model": model})
+        llm_caller = _make_llm_caller(config)
 
-    if document:
-        from .prompts import QUICK_ANOMALY_CHECK_PROMPT
-        prompt = QUICK_ANOMALY_CHECK_PROMPT.format(document=document)
-        output, _ = await llm_caller.acall(SYSTEM_PROMPT, prompt)
-        return f"# 快速异常检测\n\n{output}"
+        if document:
+            from .prompts import QUICK_ANOMALY_CHECK_PROMPT
+            prompt = QUICK_ANOMALY_CHECK_PROMPT.format(document=document)
+            output, _ = await llm_caller.acall(SYSTEM_PROMPT, prompt)
+            return f"# 快速异常检测\n\n{output}"
 
-    if not case_dir:
-        return "错误：必须提供 case_dir 或 document 参数"
+        if not case_dir:
+            return "错误：必须提供 case_dir 或 document 参数"
 
-    preprocessor = Preprocessor(llm_caller)
-    preprocess_result = await preprocessor.run(case_dir)
+        preprocessor = Preprocessor(llm_caller)
+        preprocess_result = await preprocessor.run(case_dir)
 
-    prompt = QUICK_CHECK_PROMPT.format(materials=preprocess_result.materials_text)
-    output, _ = await llm_caller.acall("你是事实认定审查专家，请逐项对照检查。", prompt)
+        prompt = QUICK_CHECK_PROMPT.format(materials=preprocess_result.materials_text)
+        output, _ = await llm_caller.acall("你是事实认定审查专家，请逐项对照检查。", prompt)
 
-    return f"# 事实认定错误快速对照清单\n\n{output}"
+        return f"# 事实认定错误快速对照清单\n\n{output}"
+    except FileNotFoundError as e:
+        logger.error("quick_check: 案件目录不存在: %s", e)
+        return f"# 错误\n案件目录不存在：{e}"
+    except Exception as e:
+        logger.error("quick_check: %s", e, exc_info=True)
+        return f"# 错误\n快速检测异常：{e}"
 
 
 @mcp.tool()
@@ -425,102 +487,123 @@ async def scan_dimension(case_dir: str, dimension: int, model: str | None = None
     if dimension < 1 or dimension > len(dim_keys):
         return f"错误：维度编号必须在 1-{len(dim_keys)} 之间"
 
-    dim_key = dim_keys[dimension - 1]
-    config = _load_config({"model": model})
-    config.detection.dimensions = [dim_key]
-    llm_caller = _make_llm_caller(config)
+    try:
+        dim_key = dim_keys[dimension - 1]
+        config = _load_config({"model": model})
+        config.detection.dimensions = [dim_key]
+        llm_caller = _make_llm_caller(config)
 
-    preprocessor = Preprocessor(llm_caller)
-    preprocess_result = await preprocessor.run(case_dir)
+        preprocessor = Preprocessor(llm_caller)
+        preprocess_result = await preprocessor.run(case_dir)
 
-    prompt = DIMENSION_PROMPTS[dim_key] + DIMENSION_SUFFIX
-    formatted = prompt.format(materials=preprocess_result.materials_text)
-    output, _ = await llm_caller.acall(SYSTEM_PROMPT, formatted)
+        prompt = DIMENSION_PROMPTS[dim_key] + DIMENSION_SUFFIX
+        formatted = prompt.format(materials=preprocess_result.materials_text)
+        output, _ = await llm_caller.acall(SYSTEM_PROMPT, formatted)
 
-    related_cats = dimension_to_categories(dimension)
-    cat_info = ""
-    if related_cats:
-        cat_info = f"\n\n**关联A系列分类**：{', '.join(f'{c.code} {c.label}' for c in related_cats)}"
+        related_cats = dimension_to_categories(dimension)
+        cat_info = ""
+        if related_cats:
+            cat_info = f"\n\n**关联A系列分类**：{', '.join(f'{c.code} {c.label}' for c in related_cats)}"
 
-    return f"# 维度{dimension}（{dim_key}）单独扫描结果{cat_info}\n\n{output}"
+        return f"# 维度{dimension}（{dim_key}）单独扫描结果{cat_info}\n\n{output}"
+    except FileNotFoundError as e:
+        logger.error("scan_dimension: 案件目录不存在: %s", e)
+        return f"# 错误\n案件目录不存在：{e}"
+    except Exception as e:
+        logger.error("scan_dimension: %s", e, exc_info=True)
+        return f"# 错误\n维度扫描异常：{e}"
 
 
 @mcp.tool()
 async def adversarial_check(case_dir: str, model: str | None = None) -> str:
     """独立执行多角色对抗审查，对已检测的异常点进行反向校验。
     包含Devil's Advocate校验和五角色多维对抗审查，并执行反向异常检测。"""
-    config = _load_config({"model": model})
-    llm_caller = _make_llm_caller(config)
+    try:
+        config = _load_config({"model": model})
+        llm_caller = _make_llm_caller(config)
 
-    engine = DetectionEngine(config)
-    detection_result = await engine.run_detection(case_dir)
-    anomalies_text = _extract_anomalies_text(detection_result)
+        engine = DetectionEngine(config)
+        detection_result = await engine.run_detection(case_dir)
+        anomalies_text = _extract_anomalies_text(detection_result)
 
-    if anomalies_text == "未发现显著异常":
-        return "未检测到异常点，无需执行对抗审查"
+        if anomalies_text == "未发现显著异常":
+            return "未检测到异常点，无需执行对抗审查"
 
-    reviewer = AdversarialReviewer(llm_caller, config.adversarial)
-    adversarial_result = await reviewer.run(anomalies_text)
+        reviewer = AdversarialReviewer(llm_caller, config.adversarial)
+        adversarial_result = await reviewer.run(anomalies_text)
 
-    return _format_adversarial_result(adversarial_result)
+        return _format_adversarial_result(adversarial_result)
+    except FileNotFoundError as e:
+        logger.error("adversarial_check: 案件目录不存在: %s", e)
+        return f"# 错误\n案件目录不存在：{e}"
+    except Exception as e:
+        logger.error("adversarial_check: %s", e, exc_info=True)
+        return f"# 错误\n对抗审查异常：{e}"
 
 
 @mcp.tool()
 async def generate_report(case_dir: str, model: str | None = None) -> str:
     """运行完整检测流程并生成结构化报告，包含异常等级判定和救济建议。
     报告中每个异常点映射到A1-A8分类，并标注指向获益方、反向校验结果和净异常判定。"""
-    config = _load_config({"model": model})
-    llm_caller = _make_llm_caller(config)
+    try:
+        config = _load_config({"model": model})
+        llm_caller = _make_llm_caller(config)
 
-    preprocessor = Preprocessor(llm_caller)
-    preprocess_result = await preprocessor.run(case_dir)
+        preprocessor = Preprocessor(llm_caller)
+        preprocess_result = await preprocessor.run(case_dir)
 
-    engine = DetectionEngine(config)
-    detection_result = await engine.run_detection(case_dir)
+        engine = DetectionEngine(config)
+        detection_result = await engine.run_detection(case_dir)
 
-    assessor = QualityAssessor(llm_caller)
-    quality_result = await assessor.assess(preprocess_result.materials_text)
+        assessor = QualityAssessor(llm_caller)
+        quality_result = await assessor.assess(preprocess_result.materials_text)
 
-    anomalies_text = _extract_anomalies_text(detection_result)
-    reviewer = AdversarialReviewer(llm_caller, config.adversarial)
-    adversarial_result = await reviewer.run(anomalies_text)
+        anomalies_text = _extract_anomalies_text(detection_result)
+        reviewer = AdversarialReviewer(llm_caller, config.adversarial)
+        adversarial_result = await reviewer.run(anomalies_text)
 
-    from .prompts import REPORT_TEMPLATE
-    from . import __version__
-    from datetime import datetime
+        from .prompts import REPORT_TEMPLATE
+        from . import __version__
+        from datetime import datetime
 
-    report = REPORT_TEMPLATE.format(
-        case_name=preprocess_result.case_info.case_name or "未知",
-        doc_type=preprocess_result.case_info.case_type or "未知",
-        model_name=config.llm.model,
-        detection_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        completeness_score=f"{preprocess_result.completeness_score:.1f}",
-        legal_basis="《民事诉讼法》《行政诉讼法》《行政处罚法》等",
-        version=__version__,
-        risk_level=detection_result.risk_level,
-        risk_reason=detection_result.risk_reason if hasattr(detection_result, 'risk_reason') else "综合多维度分析",
-        anomaly_table=_build_anomaly_table(detection_result),
-        dimension_details=detection_result.report_markdown,
-        timeline_table=_build_timeline_table(preprocess_result),
-        temporal_anomalies="（见维度检测时间一致性分析）",
-        semantic_drift_table="（见维度检测语义漂移分析）",
-        negative_space_analysis="（见维度检测缺失信息分析）",
-        deviation_table="（见维度检测类案偏离分析）",
-        procedure_graph_text="（见图结构建模结果）",
-        mermaid_graph="（见build_graph工具输出）",
-        anomaly_paths="（见图结构建模结果）",
-        adversarial_table=_build_adversarial_table(adversarial_result),
-        coupling_analysis="（见维度检测耦合分析）",
-        quality_score_table=_build_quality_score_table(quality_result),
-        quality_total_score=str(quality_result.total_score),
-        quality_grade=quality_result.grade,
-        quality_strengths="；".join(quality_result.strengths) if quality_result.strengths else "无",
-        quality_weaknesses="；".join(quality_result.weaknesses) if quality_result.weaknesses else "无",
-        quick_check_results="（见quick_check工具输出）",
-        remedies="（见检测报告救济建议部分）",
-    )
+        report = REPORT_TEMPLATE.format(
+            case_name=preprocess_result.case_info.case_name or "未知",
+            doc_type=preprocess_result.case_info.case_type or "未知",
+            model_name=config.llm.model,
+            detection_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            completeness_score=f"{preprocess_result.completeness_score:.1f}",
+            legal_basis="《民事诉讼法》《行政诉讼法》《行政处罚法》等",
+            version=__version__,
+            risk_level=detection_result.risk_level,
+            risk_reason=detection_result.risk_reason if hasattr(detection_result, 'risk_reason') else "综合多维度分析",
+            anomaly_table=_build_anomaly_table(detection_result),
+            dimension_details=detection_result.report_markdown,
+            timeline_table=_build_timeline_table(preprocess_result),
+            temporal_anomalies="（见维度检测时间一致性分析）",
+            semantic_drift_table="（见维度检测语义漂移分析）",
+            negative_space_analysis="（见维度检测缺失信息分析）",
+            deviation_table="（见维度检测类案偏离分析）",
+            procedure_graph_text="（见图结构建模结果）",
+            mermaid_graph="（见build_graph工具输出）",
+            anomaly_paths="（见图结构建模结果）",
+            adversarial_table=_build_adversarial_table(adversarial_result),
+            coupling_analysis="（见维度检测耦合分析）",
+            quality_score_table=_build_quality_score_table(quality_result),
+            quality_total_score=str(quality_result.total_score),
+            quality_grade=quality_result.grade,
+            quality_strengths="；".join(quality_result.strengths) if quality_result.strengths else "无",
+            quality_weaknesses="；".join(quality_result.weaknesses) if quality_result.weaknesses else "无",
+            quick_check_results="（见quick_check工具输出）",
+            remedies="（见检测报告救济建议部分）",
+        )
 
-    return report
+        return report
+    except FileNotFoundError as e:
+        logger.error("generate_report: 案件目录不存在: %s", e)
+        return f"# 错误\n案件目录不存在：{e}"
+    except Exception as e:
+        logger.error("generate_report: %s", e, exc_info=True)
+        return f"# 错误\n报告生成异常：{e}"
 
 
 # ── Formatting helpers ─────────────────────────────────────────
@@ -551,14 +634,16 @@ def _build_adversarial_table(adversarial_result) -> str:
     rows = []
     if adversarial_result.devils_advocate_results:
         for da in adversarial_result.devils_advocate_results:
-            rows.append(f"| {da.anomaly_description[:40]} | {getattr(da, 'alternative_explanation', '-')[:30]} | {'✅' if da.conclusion == '成立' else '⚠️' if da.conclusion == '存疑' else '❌'} | {'✅' if da.conclusion == '成立' else '⚠️' if da.conclusion == '存疑' else '❌'} | {'✅' if da.conclusion == '成立' else '⚠️' if da.conclusion == '存疑' else '❌'} | {da.conclusion} |")
+            alt = getattr(da, 'q1_alternative_explanation', '-') or '-'
+            rows.append(f"| {da.anomaly_description[:40]} | {alt[:30]} | {'✅' if da.conclusion == '成立' else '⚠️' if da.conclusion == '存疑' else '❌'} | {'✅' if da.conclusion == '成立' else '⚠️' if da.conclusion == '存疑' else '❌'} | {'✅' if da.conclusion == '成立' else '⚠️' if da.conclusion == '存疑' else '❌'} | {da.conclusion} |")
     return "\n".join(rows) if rows else "| - | - | - | - | - | - |"
 
 
 def _build_quality_score_table(quality_result) -> str:
     rows = []
     for ds in quality_result.dimension_scores:
-        rows.append(f"| {ds.dimension} | {ds.full_score} | {ds.full_score - ds.score} | {ds.score} | {getattr(ds, 'deduction_items', '-')[:40]} |")
+        deduction_items_str = str(ds.deduction_items)[:40] if ds.deduction_items else '-'
+        rows.append(f"| {ds.dimension} | {ds.full_score} | {ds.deduction} | {ds.score} | {deduction_items_str} |")
     return "\n".join(rows) if rows else "| - | - | - | - | - |"
 
 
