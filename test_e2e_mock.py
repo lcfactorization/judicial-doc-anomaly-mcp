@@ -1,13 +1,24 @@
 """Mock end-to-end test for generate_report with A1-A8 classification and 16-dimension scoring."""
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from judicial_lint_mcp.adversarial import (
+    AdversarialResult,
+    DevilsAdvocateResult,
+    RoleReviewResult,
+)
 from judicial_lint_mcp.config import AppConfig
-from judicial_lint_mcp.preprocessor import PreprocessResult, CaseInfo, TimelineEntry, EvidenceEntry, ClaimEntry
-from judicial_lint_mcp.detector import DetectionResult, DimensionResult, AnomalyItem
-from judicial_lint_mcp.quality_assessor import QualityAssessmentResult, DimensionScore
-from judicial_lint_mcp.adversarial import AdversarialResult, DevilsAdvocateResult, RoleReviewResult
-from judicial_lint_mcp.server import generate_report, benchmark_compare
+from judicial_lint_mcp.detector import AnomalyItem, DetectionResult, DimensionResult
+from judicial_lint_mcp.preprocessor import (
+    CaseInfo,
+    ClaimEntry,
+    EvidenceEntry,
+    PreprocessResult,
+    TimelineEntry,
+)
+from judicial_lint_mcp.quality_assessor import DimensionScore, QualityAssessmentResult
+from judicial_lint_mcp.server import benchmark_compare, generate_report
 
 
 async def test_generate_report():
@@ -25,7 +36,12 @@ async def test_generate_report():
         TimelineEntry(date="2024-03-20", event="开庭审理", source="案卷"),
     ]
     evidence = [
-        EvidenceEntry(evidence_id="E1", evidence_type="书证", submitted_by="原告", description="微信聊天记录")
+        EvidenceEntry(
+            evidence_id="E1",
+            evidence_type="书证",
+            submitted_by="原告",
+            description="微信聊天记录",
+        )
     ]
     claims = [ClaimEntry(claim_id="C1", party="原告", claim_content="确认劳动关系")]
     preprocess_result = PreprocessResult(
@@ -64,7 +80,12 @@ async def test_generate_report():
 
     dim_scores = [
         DimensionScore(
-            dimension="程序合规性", full_score=20, deduction=4, score=16, weight=0.20, weighted_score=3.2
+            dimension="程序合规性",
+            full_score=20,
+            deduction=4,
+            score=16,
+            weight=0.20,
+            weighted_score=3.2,
         )
     ]
     quality_result = QualityAssessmentResult(

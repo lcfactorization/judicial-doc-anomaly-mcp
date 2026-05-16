@@ -7,9 +7,7 @@ evidence indexing, and claims mapping.
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from .config import MATERIAL_PRIORITY
 from .llm_caller import LLMCaller
@@ -78,7 +76,17 @@ class Preprocessor:
         if not case_path.exists():
             return materials
         for file_path in sorted(case_path.rglob("*")):
-            if file_path.is_file() and file_path.suffix.lower() in (".md", ".txt", ".pdf"):
+            if file_path.is_file() and file_path.suffix.lower() in (
+                ".md",
+                ".txt",
+                ".pdf",
+            ):
+                name_lower = file_path.name.lower()
+                if any(kw in name_lower for kw in (
+                    "report", "检测报告", "异常检测", "评估报告",
+                    "deepseek_markdown", "阅卷",
+                )):
+                    continue
                 try:
                     content = file_path.read_text(encoding="utf-8")
                     materials[file_path.name] = content
@@ -99,7 +107,13 @@ class Preprocessor:
         }
         keyword_map = {
             "核心文书全文": ["判决书", "裁定书", "裁决书", "决定书"],
-            "起诉状/答辩状/上诉状/申请书/投诉书": ["起诉状", "答辩状", "上诉状", "申请书", "投诉书"],
+            "起诉状/答辩状/上诉状/申请书/投诉书": [
+                "起诉状",
+                "答辩状",
+                "上诉状",
+                "申请书",
+                "投诉书",
+            ],
             "双方证据清单及证据内容摘要/全文": ["证据清单", "证据目录", "证据材料"],
             "庭审/听证/调查笔录": ["庭审笔录", "听证笔录", "调查笔录"],
             "程序性裁定/通知/决定": ["裁定", "通知", "决定"],
@@ -119,24 +133,28 @@ class Preprocessor:
 
     def _extract_timeline(self, text: str) -> list[TimelineEntry]:
         entries = []
-        date_pattern = re.compile(
-            r"(\d{4})[年/\-\.](\d{1,2})[月/\-\.](\d{1,2})[日号]?"
-        )
+        date_pattern = re.compile(r"(\d{4})[年/\-\.](\d{1,2})[月/\-\.](\d{1,2})[日号]?")
         for match in date_pattern.finditer(text):
             year, month, day = match.groups()
             date_str = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
             start = max(0, match.start() - 20)
             end = min(len(text), match.end() + 80)
             context = text[start:end].strip()
-            entries.append(
-                TimelineEntry(date=date_str, event=context, source="文书")
-            )
+            entries.append(TimelineEntry(date=date_str, event=context, source="文书"))
         return entries
 
     async def run(self, case_dir: str) -> PreprocessResult:
         materials = self._load_materials(case_dir)
         if not materials:
             return PreprocessResult(missing_items=["未找到任何案件材料"])
+
+        for name in materials:
+            if "上诉状" in name:
+                materials[name] = (
+                    "【说明：以下上诉状在本检测中视为原告答辩意见，"
+                    "仅用于补充事实和证据，忽略其中对一审判决的驳斥和日期矛盾。】\n"
+                    + materials[name]
+                )
 
         materials_text = "\n\n---\n\n".join(
             f"## {name}\n{content}" for name, content in materials.items()

@@ -6,9 +6,13 @@ with grade determination (A-F).
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional
 
-from .config import QUALITY_DIMENSIONS, QUALITY_WEIGHTS, QUALITY_FULL_SCORES, QUALITY_GRADES
+from .config import (
+    QUALITY_DIMENSIONS,
+    QUALITY_FULL_SCORES,
+    QUALITY_GRADES,
+    QUALITY_WEIGHTS,
+)
 from .llm_caller import LLMCaller
 from .prompts import QUALITY_ASSESSMENT_PROMPT
 

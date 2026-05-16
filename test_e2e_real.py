@@ -1,12 +1,12 @@
 """Real end-to-end test with DeepSeek API for A1-A8 classification and 16-dimension scoring."""
+
 import asyncio
-import os
-import sys
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
-from judicial_lint_mcp.server import scan_dimension, dry_run, benchmark_compare
+from judicial_lint_mcp.server import benchmark_compare, dry_run, scan_dimension
 
 
 async def main():
@@ -24,7 +24,9 @@ async def main():
     result = await scan_dimension(case_dir, 2)
     print(result[:3000])
 
-    has_a_code = any(code in result for code in ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8"])
+    has_a_code = any(
+        code in result for code in ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8"]
+    )
     has_beneficiary = "获益" in result or "被告" in result or "原告" in result
     has_reverse = "反向" in result or "校验" in result
 

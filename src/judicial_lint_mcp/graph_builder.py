@@ -4,10 +4,8 @@ Builds Evidence Graph, Procedure Graph, and Legal Reasoning Graph
 using networkx for graph computation and Mermaid for visualization.
 """
 
-import json
 import re
 from dataclasses import dataclass, field
-from typing import Optional
 
 import networkx as nx
 
@@ -44,9 +42,9 @@ class AnomalyPath:
 
 @dataclass
 class GraphBuildResult:
-    evidence_graph: Optional[nx.DiGraph] = None
-    procedure_graph: Optional[nx.DiGraph] = None
-    reasoning_graph: Optional[nx.DiGraph] = None
+    evidence_graph: nx.DiGraph | None = None
+    procedure_graph: nx.DiGraph | None = None
+    reasoning_graph: nx.DiGraph | None = None
     evidence_mermaid: str = ""
     procedure_mermaid: str = ""
     reasoning_mermaid: str = ""
@@ -61,13 +59,13 @@ class GraphBuilder:
 
     def _nx_to_mermaid(self, graph: nx.DiGraph, title: str = "") -> str:
         if not graph.nodes:
-            return f"graph TD\n    empty[\"{title}: 无数据\"]\n"
-        lines = [f"graph TD"]
+            return f'graph TD\n    empty["{title}: 无数据"]\n'
+        lines = ["graph TD"]
         node_type_shapes = {
             "START": ("([", "])"),
             "END": ("([", "])"),
             "MOTION": ("{{", "}}"),
-            "RULING":("[", "]"),
+            "RULING": ("[", "]"),
             "HEARING": ("([", "])"),
             "EVIDENCE": ("(", ")"),
             "JUDGMENT": ("[[", "]]"),
@@ -80,23 +78,29 @@ class GraphBuilder:
             ntype = data.get("node_type", "")
             shape = node_type_shapes.get(ntype, ("[", "]"))
             safe_id = re.sub(r"[^a-zA-Z0-9_]", "_", node_id)
-            lines.append(f"    {safe_id}{shape[0]}\"{label}\"{shape[1]}")
+            lines.append(f'    {safe_id}{shape[0]}"{label}"{shape[1]}')
         for src, tgt, data in graph.edges(data=True):
             edge_label = data.get("edge_type", "")
             safe_src = re.sub(r"[^a-zA-Z0-9_]", "_", src)
             safe_tgt = re.sub(r"[^a-zA-Z0-9_]", "_", tgt)
             if edge_label:
-                lines.append(f"    {safe_src} -->|\"{edge_label}\"| {safe_tgt}")
+                lines.append(f'    {safe_src} -->|"{edge_label}"| {safe_tgt}')
             else:
                 lines.append(f"    {safe_src} --> {safe_tgt}")
         return "\n".join(lines)
 
     def _detect_procedure_anomalies(self, graph: nx.DiGraph) -> list[AnomalyPath]:
         anomalies = []
-        motions = [n for n, d in graph.nodes(data=True) if d.get("node_type") == "MOTION"]
-        rulings = [n for n, d in graph.nodes(data=True) if d.get("node_type") == "RULING"]
+        motions = [
+            n for n, d in graph.nodes(data=True) if d.get("node_type") == "MOTION"
+        ]
+        rulings = [
+            n for n, d in graph.nodes(data=True) if d.get("node_type") == "RULING"
+        ]
         for motion in motions:
-            has_ruling = any(graph.has_edge(motion, r) or graph.has_edge(r, motion) for r in rulings)
+            has_ruling = any(
+                graph.has_edge(motion, r) or graph.has_edge(r, motion) for r in rulings
+            )
             motion_data = graph.nodes[motion]
             if not has_ruling:
                 anomalies.append(
@@ -108,8 +112,12 @@ class GraphBuilder:
                     )
                 )
         starts = [n for n, d in graph.nodes(data=True) if d.get("node_type") == "START"]
-        judgments = [n for n, d in graph.nodes(data=True) if d.get("node_type") == "JUDGMENT"]
-        hearings = [n for n, d in graph.nodes(data=True) if d.get("node_type") == "HEARING"]
+        judgments = [
+            n for n, d in graph.nodes(data=True) if d.get("node_type") == "JUDGMENT"
+        ]
+        hearings = [
+            n for n, d in graph.nodes(data=True) if d.get("node_type") == "HEARING"
+        ]
         if starts and judgments and not hearings:
             anomalies.append(
                 AnomalyPath(
@@ -121,9 +129,7 @@ class GraphBuilder:
             )
         return anomalies
 
-    def _build_evidence_graph_from_data(
-        self, evidence_index: list
-    ) -> nx.DiGraph:
+    def _build_evidence_graph_from_data(self, evidence_index: list) -> nx.DiGraph:
         G = nx.DiGraph()
         for ev in evidence_index:
             G.add_node(
@@ -135,9 +141,7 @@ class GraphBuilder:
             )
         return G
 
-    def _build_procedure_graph_from_data(
-        self, timeline: list
-    ) -> nx.DiGraph:
+    def _build_procedure_graph_from_data(self, timeline: list) -> nx.DiGraph:
         G = nx.DiGraph()
         G.add_node("START", node_type="START", label="立案受理")
         G.add_node("END", node_type="END", label="程序终结")
@@ -178,10 +182,14 @@ class GraphBuilder:
 
         if self.config.enable_reasoning_graph:
             result.reasoning_graph = nx.DiGraph()
-            result.reasoning_graph.add_node("evidence", node_type="EVIDENCE", label="证据")
+            result.reasoning_graph.add_node(
+                "evidence", node_type="EVIDENCE", label="证据"
+            )
             result.reasoning_graph.add_node("fact", node_type="FACT", label="事实认定")
             result.reasoning_graph.add_node("norm", node_type="NORM", label="法律规范")
-            result.reasoning_graph.add_node("conclusion", node_type="CONCLUSION", label="裁判结论")
+            result.reasoning_graph.add_node(
+                "conclusion", node_type="CONCLUSION", label="裁判结论"
+            )
             result.reasoning_graph.add_edge("evidence", "fact", edge_type="支撑")
             result.reasoning_graph.add_edge("fact", "norm", edge_type="适用")
             result.reasoning_graph.add_edge("norm", "conclusion", edge_type="推导")

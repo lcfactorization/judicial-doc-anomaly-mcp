@@ -1,15 +1,14 @@
 """Tests for adversarial module"""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from judicial_lint_mcp.adversarial import (
-    AdversarialReviewer,
-    AdversarialResult,
-    DevilsAdvocateResult,
-    RoleReviewResult,
-    CrossExaminationResult,
     ROLE_NAMES_CN,
+    AdversarialResult,
+    AdversarialReviewer,
+    CrossExaminationResult,
 )
 from judicial_lint_mcp.config import AdversarialConfig
 
@@ -17,7 +16,13 @@ from judicial_lint_mcp.config import AdversarialConfig
 @pytest.fixture
 def adversarial_config():
     return AdversarialConfig(
-        roles=["plaintiff_agent", "defendant_agent", "appellate_judge", "legal_scholar", "public_supervisor"],
+        roles=[
+            "plaintiff_agent",
+            "defendant_agent",
+            "appellate_judge",
+            "legal_scholar",
+            "public_supervisor",
+        ],
         enable_devils_advocate=True,
         enable_multi_role=True,
         enable_cross_examination=True,
@@ -86,7 +91,9 @@ Q3有反证：否
 
 class TestAdversarialDevilsAdvocate:
 
-    def test_parse_devils_advocate_established(self, mock_llm_caller, adversarial_config):
+    def test_parse_devils_advocate_established(
+        self, mock_llm_caller, adversarial_config
+    ):
         reviewer = AdversarialReviewer(mock_llm_caller, adversarial_config)
         results = reviewer._parse_devils_advocate(MOCK_ADVERSARIAL_OUTPUT)
         assert len(results) >= 1
@@ -140,7 +147,9 @@ class TestAdversarialRun:
 
     @pytest.mark.asyncio
     async def test_run_full(self, mock_llm_caller, adversarial_config):
-        mock_llm_caller.acall = AsyncMock(return_value=(MOCK_ADVERSARIAL_OUTPUT, {"total_tokens": 500}))
+        mock_llm_caller.acall = AsyncMock(
+            return_value=(MOCK_ADVERSARIAL_OUTPUT, {"total_tokens": 500})
+        )
         reviewer = AdversarialReviewer(mock_llm_caller, adversarial_config)
         result = await reviewer.run("测试异常文本")
 
@@ -150,7 +159,9 @@ class TestAdversarialRun:
 
     @pytest.mark.asyncio
     async def test_run_minimal(self, mock_llm_caller, minimal_config):
-        mock_llm_caller.acall = AsyncMock(return_value=("简单输出", {"total_tokens": 100}))
+        mock_llm_caller.acall = AsyncMock(
+            return_value=("简单输出", {"total_tokens": 100})
+        )
         reviewer = AdversarialReviewer(mock_llm_caller, minimal_config)
         result = await reviewer.run("测试异常文本")
 
@@ -174,8 +185,12 @@ class TestAdversarialRun:
         assert len(result.devils_advocate_results) == 0
 
     @pytest.mark.asyncio
-    async def test_cross_examination_with_confirmed_points(self, mock_llm_caller, adversarial_config):
-        mock_llm_caller.acall = AsyncMock(return_value=(MOCK_ADVERSARIAL_OUTPUT, {"total_tokens": 500}))
+    async def test_cross_examination_with_confirmed_points(
+        self, mock_llm_caller, adversarial_config
+    ):
+        mock_llm_caller.acall = AsyncMock(
+            return_value=(MOCK_ADVERSARIAL_OUTPUT, {"total_tokens": 500})
+        )
         reviewer = AdversarialReviewer(mock_llm_caller, adversarial_config)
         result = await reviewer.run("测试异常文本")
 
@@ -187,7 +202,9 @@ class TestAdversarialRun:
 
     @pytest.mark.asyncio
     async def test_high_risk_points(self, mock_llm_caller, adversarial_config):
-        mock_llm_caller.acall = AsyncMock(return_value=(MOCK_ADVERSARIAL_OUTPUT, {"total_tokens": 500}))
+        mock_llm_caller.acall = AsyncMock(
+            return_value=(MOCK_ADVERSARIAL_OUTPUT, {"total_tokens": 500})
+        )
         reviewer = AdversarialReviewer(mock_llm_caller, adversarial_config)
         result = await reviewer.run("测试异常文本")
 

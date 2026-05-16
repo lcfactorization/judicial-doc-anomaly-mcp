@@ -1,21 +1,20 @@
 """Tests for graph_builder module"""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 import networkx as nx
+import pytest
 
+from judicial_lint_mcp.config import GraphConfig
 from judicial_lint_mcp.graph_builder import (
     GraphBuilder,
     GraphBuildResult,
-    AnomalyPath,
 )
-from judicial_lint_mcp.config import GraphConfig
 from judicial_lint_mcp.preprocessor import (
-    PreprocessResult,
     CaseInfo,
-    TimelineEntry,
     EvidenceEntry,
+    PreprocessResult,
+    TimelineEntry,
 )
 
 
@@ -32,7 +31,9 @@ def graph_config():
 @pytest.fixture
 def mock_llm_caller():
     caller = MagicMock()
-    caller.acall = AsyncMock(return_value=("Graph building complete", {"total_tokens": 200}))
+    caller.acall = AsyncMock(
+        return_value=("Graph building complete", {"total_tokens": 200})
+    )
     return caller
 
 
@@ -143,7 +144,9 @@ class TestGraphBuilderProcedureAnomalies:
 
 class TestGraphBuilderEvidenceGraph:
 
-    def test_build_evidence_graph(self, mock_llm_caller, graph_config, sample_preprocess_result):
+    def test_build_evidence_graph(
+        self, mock_llm_caller, graph_config, sample_preprocess_result
+    ):
         gb = GraphBuilder(mock_llm_caller, graph_config)
         G = gb._build_evidence_graph_from_data(sample_preprocess_result.evidence_index)
         assert len(G.nodes) == 2
@@ -159,7 +162,9 @@ class TestGraphBuilderEvidenceGraph:
 
 class TestGraphBuilderProcedureGraph:
 
-    def test_build_procedure_graph(self, mock_llm_caller, graph_config, sample_preprocess_result):
+    def test_build_procedure_graph(
+        self, mock_llm_caller, graph_config, sample_preprocess_result
+    ):
         gb = GraphBuilder(mock_llm_caller, graph_config)
         G = gb._build_procedure_graph_from_data(sample_preprocess_result.timeline)
         assert "START" in G.nodes
@@ -179,7 +184,9 @@ class TestGraphBuilderProcedureGraph:
 class TestGraphBuilderRun:
 
     @pytest.mark.asyncio
-    async def test_run_all_graphs(self, mock_llm_caller, graph_config, sample_preprocess_result):
+    async def test_run_all_graphs(
+        self, mock_llm_caller, graph_config, sample_preprocess_result
+    ):
         gb = GraphBuilder(mock_llm_caller, graph_config)
         result = await gb.run(sample_preprocess_result)
 

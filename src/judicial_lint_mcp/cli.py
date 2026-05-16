@@ -1,13 +1,17 @@
 """CLI entry point for judicial-lint"""
 
-import click
 import asyncio
 import json
+import re
+from datetime import datetime
 from pathlib import Path
+
+import click
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.table import Table
+
 from .config import AppConfig
 from .detector import DetectionEngine
 
@@ -31,7 +35,13 @@ def cli(ctx, config, verbose):
 @click.option("--dimensions", "-d", multiple=True, help="指定检测维度")
 @click.option("--model", "-m", help="LLM 模型名称")
 @click.option("--output", "-o", type=click.Path(), help="输出文件路径")
-@click.option("--format", "output_format", type=click.Choice(["markdown", "json", "both"]), default="markdown", help="输出格式")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["markdown", "json", "both"]),
+    default="markdown",
+    help="输出格式",
+)
 @click.option("--no-adversarial", is_flag=True, help="禁用对抗校验")
 @click.pass_context
 def analyze(ctx, case_dir, dimensions, model, output, output_format, no_adversarial):
@@ -41,17 +51,17 @@ def analyze(ctx, case_dir, dimensions, model, output, output_format, no_adversar
         config = AppConfig.from_file(config_file)
     else:
         config = AppConfig.from_env()
-    
+
     if model:
         config.llm.model = model
     if dimensions:
         config.detection.dimensions = list(dimensions)
     if no_adversarial:
         config.detection.enable_adversarial_check = False
-    
+
     async def run():
         engine = DetectionEngine(config)
-        
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -60,26 +70,38 @@ def analyze(ctx, case_dir, dimensions, model, output, output_format, no_adversar
             task = progress.add_task("正在检测...", total=None)
             result = await engine.run_detection(case_dir)
             progress.update(task, description="检测完成！")
-        
+
         # Output results
         if output:
             output_path = Path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            
+
             if output_format in ["markdown", "both"]:
-                md_path = output_path.with_suffix(".md") if output_path.suffix != ".md" else output_path
-                with open(md_path, "w", encoding="utf-8") as f:
+                if output_path.suffix != ".md":
+                    output_path = output_path.with_suffix(".md")
+                with open(output_path, "w", encoding="utf-8") as f:
                     f.write(result.report_markdown)
-                console.print(f"[green]Markdown 报告已保存至：{md_path}[/green]")
-            
+                console.print(f"[green]Markdown 报告已保存至：{output_path}[/green]")
+
             if output_format in ["json", "both"]:
-                json_path = output_path.with_suffix(".json") if output_path.suffix != ".json" else output_path
+                json_path = (
+                    output_path.with_suffix(".json")
+                    if output_path.suffix != ".json"
+                    else output_path
+                )
                 with open(json_path, "w", encoding="utf-8") as f:
                     json.dump(result.model_dump(), f, ensure_ascii=False, indent=2)
                 console.print(f"[green]JSON 报告已保存至：{json_path}[/green]")
         else:
-            console.print(Panel(result.report_markdown, title="检测报告", border_style="blue"))
-        
+            date_str = datetime.now().strftime("%Y%m%d")
+            case_id = re.sub(r"[^\w\u4e00-\u9fa5]", "", result.case_name)[:20]
+            model_label = config.llm.model.replace("/", "_")
+            default_name = f"司法文书异常检测报告_{case_id}_{model_label}_v0.2.0_{date_str}.md"
+            default_path = Path(case_dir) / default_name
+            with open(default_path, "w", encoding="utf-8") as f:
+                f.write(result.report_markdown)
+            console.print(f"[green]Markdown 报告已保存至：{default_path}[/green]")
+
         # Summary
         summary_table = Table(title="检测摘要")
         summary_table.add_column("项目", style="cyan")
@@ -87,9 +109,9 @@ def analyze(ctx, case_dir, dimensions, model, output, output_format, no_adversar
         summary_table.add_row("案件名称", result.case_name)
         summary_table.add_row("综合异常等级", result.risk_level)
         summary_table.add_row("材料完整性", f"{result.completeness_score:.1f}%")
-        summary_table.add_row("总 Token 消耗", str(result.total_tokens))
+        summary_table.add_row("总 Token 消耗", str(result.total_tokens_used))
         console.print(summary_table)
-    
+
     asyncio.run(run())
 
 
@@ -100,28 +122,30 @@ def dry_run(case_dir, dimensions):
     """预览检测流程和 Token 消耗"""
     from .detector import FileLoader
     from .prompts import DIMENSION_PROMPTS
-    
+
     loader = FileLoader(case_dir)
     loader.load()
     completeness, missing = loader.validate()
     materials = loader.get_materials_text()
-    
+
     dims = list(dimensions) if dimensions else list(DIMENSION_PROMPTS.keys())
-    
-    console.print(Panel(
-        f"材料完整性：{completeness:.1f}/100\n"
-        f"缺失材料：{', '.join(missing) if missing else '无'}\n"
-        f"材料总字符：{len(materials)}\n"
-        f"预估 Token：{int(len(materials) * 0.5)}",
-        title="材料分析",
-        border_style="cyan",
-    ))
-    
+
+    console.print(
+        Panel(
+            f"材料完整性：{completeness:.1f}/100\n"
+            f"缺失材料：{', '.join(missing) if missing else '无'}\n"
+            f"材料总字符：{len(materials)}\n"
+            f"预估 Token：{int(len(materials) * 0.5)}",
+            title="材料分析",
+            border_style="cyan",
+        )
+    )
+
     table = Table(title="检测维度预估")
     table.add_column("维度", style="cyan")
     table.add_column("Prompt 字符", justify="right")
     table.add_column("预估 Token", justify="right")
-    
+
     total_tokens = 0
     for dim in dims:
         if dim in DIMENSION_PROMPTS:
@@ -129,7 +153,7 @@ def dry_run(case_dir, dimensions):
             tokens = int(len(prompt) * 0.5)
             total_tokens += tokens
             table.add_row(dim, str(len(prompt)), str(tokens))
-    
+
     table.add_row("总计", "", str(total_tokens), style="bold green")
     console.print(table)
 
@@ -137,30 +161,16 @@ def dry_run(case_dir, dimensions):
 @cli.command()
 def list_dimensions():
     """列出所有可用的检测维度"""
-    from .prompts import DIMENSION_PROMPTS
-    
+    from .prompts import DIMENSION_PROMPTS, DIMENSION_ORDER, DIMENSION_LABELS
+
     table = Table(title="可用检测维度")
     table.add_column("维度 ID", style="cyan")
-    table.add_column("说明", style="green")
-    
-    descriptions = {
-        "procedure": "程序操作与正当性检测",
-        "evidence": "证据采信与审查一致性检测",
-        "fact_finding": "事实认定与关键情节记录检测（26项）",
-        "law_application": "法律适用与检索脱节检测",
-        "discretion": "自由裁量权滥用与惯常脱离检测",
-        "logic": "逻辑闭环断裂检测",
-        "temporal": "时间一致性检测",
-        "semantic_drift": "语义漂移检测",
-        "negative_space": "缺失信息分析（负空间检测）",
-        "case_deviation": "类案偏离量化检测",
-        "procedure_graph": "程序行为链建模检测",
-        "coupling": "惯性耦合组合高风险检测",
-    }
-    
-    for dim in DIMENSION_PROMPTS:
-        table.add_row(dim, descriptions.get(dim, ""))
-    
+    table.add_column("中文名称", style="green")
+
+    for dim in DIMENSION_ORDER:
+        if dim in DIMENSION_PROMPTS:
+            table.add_row(dim, DIMENSION_LABELS.get(dim, ""))
+
     console.print(table)
 
 

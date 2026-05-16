@@ -85,9 +85,7 @@ BENCHMARKS: list[BenchmarkCase] = [
             "证据采信标准一致，举证责任分配正确，"
             "经济补偿金计算有明确法条依据和计算过程。"
         ),
-        reasoning=(
-            "各项检测均未触发异常，为高质量判决的标杆案例。"
-        ),
+        reasoning=("各项检测均未触发异常，为高质量判决的标杆案例。"),
     ),
     BenchmarkCase(
         case_id="BM-005",

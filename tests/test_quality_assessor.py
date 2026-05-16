@@ -1,14 +1,18 @@
 """Tests for quality_assessor module"""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from judicial_lint_mcp.quality_assessor import (
-    QualityAssessor,
-    QualityAssessmentResult,
-    DimensionScore,
+import pytest
+
+from judicial_lint_mcp.config import (
+    QUALITY_DIMENSIONS,
+    QUALITY_FULL_SCORES,
+    QUALITY_WEIGHTS,
 )
-from judicial_lint_mcp.config import QUALITY_DIMENSIONS, QUALITY_WEIGHTS, QUALITY_FULL_SCORES
+from judicial_lint_mcp.quality_assessor import (
+    QualityAssessmentResult,
+    QualityAssessor,
+)
 
 
 @pytest.fixture
@@ -138,14 +142,19 @@ class TestQualityAssessorParse:
         dim_map = {ds.dimension: ds for ds in result.dimension_scores}
         assert dim_map["procedural_compliance"].score == 18
         assert dim_map["fact_finding_quality"].score == 15
-        assert dim_map["evidence_admission_norm"].score == dim_map["evidence_admission_norm"].full_score
+        assert (
+            dim_map["evidence_admission_norm"].score
+            == dim_map["evidence_admission_norm"].full_score
+        )
 
 
 class TestQualityAssessorAssess:
 
     @pytest.mark.asyncio
     async def test_assess_with_mock(self, mock_llm_caller):
-        mock_llm_caller.acall = AsyncMock(return_value=(MOCK_QUALITY_OUTPUT, {"total_tokens": 500}))
+        mock_llm_caller.acall = AsyncMock(
+            return_value=(MOCK_QUALITY_OUTPUT, {"total_tokens": 500})
+        )
         qa = QualityAssessor(mock_llm_caller)
         result = await qa.assess("测试材料")
 

@@ -1,17 +1,13 @@
 """Tests for preprocessor module"""
 
 import json
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from judicial_lint_mcp.preprocessor import (
     Preprocessor,
     PreprocessResult,
-    CaseInfo,
-    TimelineEntry,
-    EvidenceEntry,
-    ClaimEntry,
 )
 
 
@@ -53,48 +49,55 @@ def sample_case_dir(tmp_path):
 @pytest.fixture
 def mock_llm_caller():
     caller = MagicMock()
-    caller.acall = AsyncMock(return_value=(json.dumps({
-        "case_info": {
-            "case_number": "（2025）苏0602民初4514号",
-            "case_name": "张某诉某科技有限公司劳动争议案",
-            "parties": ["张某", "某科技有限公司"],
-            "case_type": "劳动争议",
-            "cause_of_action": "二倍工资差额",
-            "judgment_result": "驳回全部诉讼请求",
-            "court": "某市某区人民法院",
-            "judge_date": "2024-12-20",
-        },
-        "evidence_index": [
-            {
-                "evidence_id": "原证1",
-                "evidence_type": "书证",
-                "submitted_by": "原告",
-                "description": "银行流水",
-                "proof_object": "劳动关系存在",
-                "cross_exam_status": "已质证",
-                "admission_status": "采信部分",
-            },
-            {
-                "evidence_id": "被证1",
-                "evidence_type": "书证",
-                "submitted_by": "被告",
-                "description": "项目合作协议",
-                "proof_object": "合作关系",
-                "cross_exam_status": "已质证",
-                "admission_status": "采信",
-            },
-        ],
-        "claims_map": [
-            {
-                "claim_id": "诉请1",
-                "party": "原告",
-                "claim_content": "支付二倍工资差额75000元",
-                "evidence_refs": ["原证1"],
-                "response_status": "驳回",
-            },
-        ],
-        "missing_items": ["庭审笔录", "送达回证"],
-    }), {"total_tokens": 500}))
+    caller.acall = AsyncMock(
+        return_value=(
+            json.dumps(
+                {
+                    "case_info": {
+                        "case_number": "（2025）苏0602民初4514号",
+                        "case_name": "张某诉某科技有限公司劳动争议案",
+                        "parties": ["张某", "某科技有限公司"],
+                        "case_type": "劳动争议",
+                        "cause_of_action": "二倍工资差额",
+                        "judgment_result": "驳回全部诉讼请求",
+                        "court": "某市某区人民法院",
+                        "judge_date": "2024-12-20",
+                    },
+                    "evidence_index": [
+                        {
+                            "evidence_id": "原证1",
+                            "evidence_type": "书证",
+                            "submitted_by": "原告",
+                            "description": "银行流水",
+                            "proof_object": "劳动关系存在",
+                            "cross_exam_status": "已质证",
+                            "admission_status": "采信部分",
+                        },
+                        {
+                            "evidence_id": "被证1",
+                            "evidence_type": "书证",
+                            "submitted_by": "被告",
+                            "description": "项目合作协议",
+                            "proof_object": "合作关系",
+                            "cross_exam_status": "已质证",
+                            "admission_status": "采信",
+                        },
+                    ],
+                    "claims_map": [
+                        {
+                            "claim_id": "诉请1",
+                            "party": "原告",
+                            "claim_content": "支付二倍工资差额75000元",
+                            "evidence_refs": ["原证1"],
+                            "response_status": "驳回",
+                        },
+                    ],
+                    "missing_items": ["庭审笔录", "送达回证"],
+                }
+            ),
+            {"total_tokens": 500},
+        )
+    )
     return caller
 
 
@@ -201,7 +204,9 @@ class TestPreprocessorRun:
     @pytest.mark.asyncio
     async def test_run_llm_parse_failure(self, sample_case_dir):
         caller = MagicMock()
-        caller.acall = AsyncMock(return_value=("This is not JSON", {"total_tokens": 100}))
+        caller.acall = AsyncMock(
+            return_value=("This is not JSON", {"total_tokens": 100})
+        )
         p = Preprocessor(caller)
         result = await p.run(str(sample_case_dir))
         assert isinstance(result, PreprocessResult)

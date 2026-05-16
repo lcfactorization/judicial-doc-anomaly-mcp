@@ -13,25 +13,23 @@ Usage:
 
 import argparse
 import asyncio
-import json
 import logging
 import sys
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from judicial_lint_mcp.config import AppConfig, ALL_DIMENSIONS
-from judicial_lint_mcp.preprocessor import Preprocessor, PreprocessResult
-from judicial_lint_mcp.graph_builder import GraphBuilder, GraphBuildResult
-from judicial_lint_mcp.quality_assessor import QualityAssessor, QualityAssessmentResult
-from judicial_lint_mcp.adversarial import AdversarialReviewer, AdversarialResult
+from judicial_lint_mcp.adversarial import AdversarialReviewer
+from judicial_lint_mcp.config import AppConfig
+from judicial_lint_mcp.graph_builder import GraphBuilder
+from judicial_lint_mcp.preprocessor import Preprocessor
+from judicial_lint_mcp.quality_assessor import QualityAssessor
 from judicial_lint_mcp.server import (
-    _format_preprocess_result,
-    _format_graph_result,
-    _format_quality_result,
     _format_adversarial_result,
+    _format_graph_result,
+    _format_preprocess_result,
+    _format_quality_result,
 )
 
 logger = logging.getLogger("e2e-runner")
@@ -43,7 +41,7 @@ logging.basicConfig(
 
 MOCK_PREPROCESSOR_OUTPUT = r"""```json
 {
-  "case_number": "（2025）苏0602民初4514号",
+  "case_number": "（2025）苏9902民初9999号",
   "case_name": "张某诉某科技有限公司劳动争议案",
   "parties": ["张某", "某科技有限公司"],
   "case_type": "劳动争议",
@@ -250,6 +248,7 @@ async def run_e2e(case_dir: str, mock_mode: bool = True, model: str = "gpt-4"):
         if model:
             config.llm.model = model
         from judicial_lint_mcp.llm_caller import LLMCaller
+
         llm_caller = LLMCaller(config.llm, cache_dir=config.cache_dir)
 
     report_sections = []
@@ -259,12 +258,14 @@ async def run_e2e(case_dir: str, mock_mode: bool = True, model: str = "gpt-4"):
     logger.info("[Phase 0-1] 开始预处理...")
     preprocessor = Preprocessor(llm_caller)
     preprocess_result = await preprocessor.run(case_dir)
-    logger.info("[Phase 0-1] 预处理完成 | 完整性: %.1f | 时间线: %d | 证据: %d | 诉请: %d | 耗时: %.2fs",
-                preprocess_result.completeness_score,
-                len(preprocess_result.timeline),
-                len(preprocess_result.evidence_index),
-                len(preprocess_result.claims_map),
-                time.perf_counter() - t1)
+    logger.info(
+        "[Phase 0-1] 预处理完成 | 完整性: %.1f | 时间线: %d | 证据: %d | 诉请: %d | 耗时: %.2fs",
+        preprocess_result.completeness_score,
+        len(preprocess_result.timeline),
+        len(preprocess_result.evidence_index),
+        len(preprocess_result.claims_map),
+        time.perf_counter() - t1,
+    )
     report_sections.append(_format_preprocess_result(preprocess_result))
 
     # Phase 2: Graph building
@@ -272,12 +273,14 @@ async def run_e2e(case_dir: str, mock_mode: bool = True, model: str = "gpt-4"):
     logger.info("[Phase 2] 开始图构建...")
     graph_builder = GraphBuilder(llm_caller, config.graph)
     graph_result = await graph_builder.run(preprocess_result)
-    logger.info("[Phase 2] 图构建完成 | 证据图: %s | 程序图: %s | 推理图: %s | 异常路径: %d | 耗时: %.2fs",
-                "✓" if graph_result.evidence_mermaid else "✗",
-                "✓" if graph_result.procedure_mermaid else "✗",
-                "✓" if graph_result.reasoning_mermaid else "✗",
-                len(graph_result.anomaly_paths),
-                time.perf_counter() - t2)
+    logger.info(
+        "[Phase 2] 图构建完成 | 证据图: %s | 程序图: %s | 推理图: %s | 异常路径: %d | 耗时: %.2fs",
+        "✓" if graph_result.evidence_mermaid else "✗",
+        "✓" if graph_result.procedure_mermaid else "✗",
+        "✓" if graph_result.reasoning_mermaid else "✗",
+        len(graph_result.anomaly_paths),
+        time.perf_counter() - t2,
+    )
     report_sections.append(_format_graph_result(graph_result))
 
     # Phase 4.5: Quality assessment
@@ -285,9 +288,12 @@ async def run_e2e(case_dir: str, mock_mode: bool = True, model: str = "gpt-4"):
     logger.info("[Phase 4.5] 开始质量评估...")
     assessor = QualityAssessor(llm_caller)
     quality_result = await assessor.assess(preprocess_result.materials_text)
-    logger.info("[Phase 4.5] 质量评估完成 | 总分: %d/100 | 等级: %s | 耗时: %.2fs",
-                quality_result.total_score, quality_result.grade,
-                time.perf_counter() - t3)
+    logger.info(
+        "[Phase 4.5] 质量评估完成 | 总分: %d/100 | 等级: %s | 耗时: %.2fs",
+        quality_result.total_score,
+        quality_result.grade,
+        time.perf_counter() - t3,
+    )
     report_sections.append(_format_quality_result(quality_result))
 
     # Phase 5: Adversarial review
@@ -295,17 +301,35 @@ async def run_e2e(case_dir: str, mock_mode: bool = True, model: str = "gpt-4"):
     logger.info("[Phase 5] 开始对抗审查...")
     reviewer = AdversarialReviewer(llm_caller, config.adversarial)
     adversarial_result = await reviewer.run("测试异常文本")
-    da_count = len(adversarial_result.devils_advocate_results) if adversarial_result.devils_advocate_results else 0
-    rr_count = len(adversarial_result.role_reviews) if adversarial_result.role_reviews else 0
-    hr_count = len(adversarial_result.high_risk_points) if adversarial_result.high_risk_points else 0
-    logger.info("[Phase 5] 对抗审查完成 | DA校验: %d | 角色审查: %d | 高风险点: %d | 耗时: %.2fs",
-                da_count, rr_count, hr_count, time.perf_counter() - t4)
+    da_count = (
+        len(adversarial_result.devils_advocate_results)
+        if adversarial_result.devils_advocate_results
+        else 0
+    )
+    rr_count = (
+        len(adversarial_result.role_reviews) if adversarial_result.role_reviews else 0
+    )
+    hr_count = (
+        len(adversarial_result.high_risk_points)
+        if adversarial_result.high_risk_points
+        else 0
+    )
+    logger.info(
+        "[Phase 5] 对抗审查完成 | DA校验: %d | 角色审查: %d | 高风险点: %d | 耗时: %.2fs",
+        da_count,
+        rr_count,
+        hr_count,
+        time.perf_counter() - t4,
+    )
     report_sections.append(_format_adversarial_result(adversarial_result))
 
     total_time = time.perf_counter() - t_start
     logger.info("=" * 60)
-    logger.info("端到端测试完成 | 总耗时: %.2fs | LLM调用次数: %d",
-                total_time, llm_caller.call_count if hasattr(llm_caller, 'call_count') else '?')
+    logger.info(
+        "端到端测试完成 | 总耗时: %.2fs | LLM调用次数: %d",
+        total_time,
+        llm_caller.call_count if hasattr(llm_caller, "call_count") else "?",
+    )
     logger.info("=" * 60)
 
     full_report = "\n\n---\n\n".join(report_sections)
@@ -325,14 +349,21 @@ async def run_e2e(case_dir: str, mock_mode: bool = True, model: str = "gpt-4"):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="judicial-lint-mcp v0.2.0 本地端到端测试")
-    parser.add_argument("--case-dir", type=str,
-                        default=str(Path(__file__).parent / "tests" / "fixtures" / "sample_case"),
-                        help="案件目录路径")
-    parser.add_argument("--live", action="store_true",
-                        help="使用真实LLM API（需要LLM_API_KEY环境变量）")
-    parser.add_argument("--model", type=str, default="gpt-4",
-                        help="LLM模型名称（仅--live模式有效）")
+    parser = argparse.ArgumentParser(
+        description="judicial-lint-mcp v0.2.0 本地端到端测试"
+    )
+    parser.add_argument(
+        "--case-dir",
+        type=str,
+        default=str(Path(__file__).parent / "tests" / "fixtures" / "sample_case"),
+        help="案件目录路径",
+    )
+    parser.add_argument(
+        "--live", action="store_true", help="使用真实LLM API（需要LLM_API_KEY环境变量）"
+    )
+    parser.add_argument(
+        "--model", type=str, default="gpt-4", help="LLM模型名称（仅--live模式有效）"
+    )
     args = parser.parse_args()
 
     case_dir = Path(args.case_dir)
@@ -345,11 +376,13 @@ def main():
     for f in sorted(files):
         logger.info("  - %s (%d 字符)", f.name, f.stat().st_size)
 
-    asyncio.run(run_e2e(
-        case_dir=str(case_dir),
-        mock_mode=not args.live,
-        model=args.model,
-    ))
+    asyncio.run(
+        run_e2e(
+            case_dir=str(case_dir),
+            mock_mode=not args.live,
+            model=args.model,
+        )
+    )
 
 
 if __name__ == "__main__":

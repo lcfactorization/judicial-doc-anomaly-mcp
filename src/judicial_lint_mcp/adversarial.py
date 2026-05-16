@@ -6,9 +6,8 @@ Implements Devil's Advocate Q1/Q2/Q3 validation and
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional
 
-from .config import ADVERSARIAL_ROLES, AdversarialConfig
+from .config import AdversarialConfig
 from .llm_caller import LLMCaller
 from .prompts import ADVERSARIAL_PROMPT
 
@@ -153,10 +152,12 @@ class AdversarialReviewer:
                 confirmed_points = []
                 for da in result.devils_advocate_results:
                     if da.conclusion in ("成立", "存疑"):
-                        confirmed_points.append({
-                            "point": da.anomaly_description[:100],
-                            "da_conclusion": da.conclusion,
-                        })
+                        confirmed_points.append(
+                            {
+                                "point": da.anomaly_description[:100],
+                                "da_conclusion": da.conclusion,
+                            }
+                        )
                 for point in confirmed_points:
                     confirming = []
                     for review in result.role_reviews:
@@ -166,7 +167,9 @@ class AdversarialReviewer:
                             risk_point=point["point"],
                             confirming_roles=confirming,
                             denying_roles=[],
-                            consensus_level="多数确认" if len(confirming) >= 2 else "少数确认",
+                            consensus_level=(
+                                "多数确认" if len(confirming) >= 2 else "少数确认"
+                            ),
                             risk_level="高" if len(confirming) >= 3 else "中",
                         )
                     )
