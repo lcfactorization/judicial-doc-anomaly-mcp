@@ -164,7 +164,7 @@ report = build_report(
 )
 
 date_str = __import__("datetime").datetime.now().strftime("%Y%m%d")
-report_path = f"司法文书异常检测报告_AI-Agent-GLM_v0.4.0_{date_str}.md"
+report_path = f"司法文书异常检测报告_AI-Agent-GLM_v0.5.0_{date_str}.md"
 with open(report_path, "w", encoding="utf-8") as f:
     f.write(report)
 print(f"  Report saved to: {report_path}")

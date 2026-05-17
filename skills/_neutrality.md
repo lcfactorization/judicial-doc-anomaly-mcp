@@ -2,7 +2,7 @@
 name: _neutrality
 title: 中立性校验指令
 type: system
-version: "0.3.0"
+version: "0.5.0"
 ---
 
 # 中立性校验指令

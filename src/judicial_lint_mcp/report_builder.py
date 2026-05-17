@@ -1,6 +1,6 @@
 """Report builder — generate structured Markdown reports from detection results.
 
-v0.4.0 bridge architecture: NO LLM calls.
+v0.5.0 bridge architecture: NO LLM calls.
 Uses table-heavy format with GitHub Alerts style, concise summaries.
 """
 
@@ -104,7 +104,7 @@ class ReportBuilder:
             f"| 风险等级 | {risk_cn} |",
             f"| 异常总数 | {total}（高度 {high} / 中度 {medium} / 低度 {low}）|",
             f"| 检测维度 | {len(result.dimension_results)} |",
-            f"| 版本 | v0.4.0 Bridge Architecture |",
+            f"| 版本 | v0.5.0 Bridge Architecture |",
         ]
         return "\n".join(lines)
 

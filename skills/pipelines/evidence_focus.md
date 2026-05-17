@@ -2,7 +2,7 @@
 name: evidence_focus
 title: 证据采信专项流水线
 type: pipeline
-version: "0.3.0"
+version: "0.5.0"
 ---
 
 # 证据采信专项流水线

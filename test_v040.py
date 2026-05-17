@@ -1,4 +1,4 @@
-"""Quick smoke test for v0.4.0 MCP Server bridge tools."""
+"""Quick smoke test for v0.5.0 MCP Server bridge tools."""
 import json
 from judicial_lint_mcp.server import (
     render_skill,
@@ -9,7 +9,7 @@ from judicial_lint_mcp.server import (
 )
 
 print("=" * 60)
-print("v0.4.0 MCP Server Bridge - Smoke Test")
+print("v0.5.0 MCP Server Bridge - Smoke Test")
 print("=" * 60)
 
 # Test 1: render_skill

@@ -2,7 +2,7 @@
 name: quick_scan
 title: 快速扫描流水线
 type: pipeline
-version: "0.3.0"
+version: "0.5.0"
 ---
 
 # 快速扫描流水线

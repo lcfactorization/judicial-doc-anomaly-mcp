@@ -1,6 +1,6 @@
 """Data models for judicial document anomaly detection.
 
-Extracted from detector.py in v0.3.0 to break circular imports.
+Extracted from detector.py in v0.3.0 to break circular imports. Current version: v0.5.0.
 """
 
 from pydantic import BaseModel

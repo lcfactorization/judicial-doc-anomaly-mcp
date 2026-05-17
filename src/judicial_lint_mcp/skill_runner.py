@@ -1,6 +1,6 @@
 """Skill Loader & Template Renderer — loads SKILL.md files, renders templates.
 
-v0.4.0 bridge architecture: NO LLM calls.
+v0.5.0 bridge architecture: NO LLM calls.
 This module only provides SkillLoader (file I/O) and TemplateRenderer (variable substitution).
 LLM calling is the Agent's responsibility.
 """
@@ -24,7 +24,7 @@ class SkillMeta:
     order: int = 0
     depends_on: list[str] = field(default_factory=list)
     output_format: str = ""
-    version: str = "0.4.0"
+    version: str = "0.5.0"
 
 
 class SkillLoader:
@@ -78,7 +78,7 @@ class SkillLoader:
             order=int(fm.get("order", 0)),
             depends_on=fm.get("depends_on", []) if isinstance(fm.get("depends_on"), list) else [],
             output_format=fm.get("output_format", ""),
-            version=fm.get("version", "0.4.0"),
+            version=fm.get("version", "0.5.0"),
         )
 
         logger.info(

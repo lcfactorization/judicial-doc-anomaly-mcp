@@ -1,6 +1,6 @@
 """Response parser — extract structured anomaly items from LLM/Agent responses.
 
-v0.4.0 bridge architecture: simplified terminology handling.
+v0.5.0 bridge architecture: simplified terminology handling.
 Removes hardcoded beneficiary normalization — Agent/LLM handles terminology
 based on document context (仲裁/一审/二审/行政执法).
 Only keeps core text parsing logic.

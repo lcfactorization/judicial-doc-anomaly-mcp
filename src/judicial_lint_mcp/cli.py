@@ -1,4 +1,4 @@
-"""CLI v0.4.0 — Simple Agent that uses MCP Server bridge tools.
+"""CLI v0.5.0 — Simple Agent that uses MCP Server bridge tools.
 
 This CLI demonstrates how an AI Agent would use the MCP Server:
   1. render_skill / render_pipeline → get prompts
@@ -54,10 +54,10 @@ def _call_tool(tool_name: str, arguments: dict) -> str:
 
 
 @click.group()
-@click.version_option(version="0.4.0")
+@click.version_option(version="0.5.0")
 @click.pass_context
 def cli(ctx):
-    """司法文书异常检测工具 v0.4.0 (Bridge Architecture)"""
+    """司法文书异常检测工具 v0.5.0 (Bridge Architecture)"""
     ctx.ensure_object(dict)
 
 
@@ -212,7 +212,7 @@ def report(case_name, results_file, doc_type, model, output):
         console.print(f"[green]报告已保存至：{output}[/green]")
     else:
         date_str = datetime.now().strftime("%Y%m%d")
-        default_name = f"司法文书异常检测报告_AI-Agent_v0.4.0_{date_str}.md"
+        default_name = f"司法文书异常检测报告_AI-Agent_v0.5.0_{date_str}.md"
         default_path = Path(".") / default_name
         default_path.write_text(result, encoding="utf-8")
         console.print(f"[green]报告已保存至：{default_path}[/green]")

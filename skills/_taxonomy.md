@@ -2,7 +2,7 @@
 name: _taxonomy
 title: A系列异常分类体系
 type: system
-version: "0.3.0"
+version: "0.5.0"
 ---
 
 # A系列异常分类体系

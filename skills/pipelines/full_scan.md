@@ -2,7 +2,7 @@
 name: full_scan
 title: 全量16维扫描流水线
 type: pipeline
-version: "0.3.0"
+version: "0.5.0"
 ---
 
 # 全量16维扫描流水线

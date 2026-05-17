@@ -1,4 +1,4 @@
-"""Local end-to-end runner for judicial-lint-mcp v0.2.0
+"""Local end-to-end runner for judicial-lint-mcp v0.5.0
 
 Simulates a detect_anomalies call with a desensitized test case directory.
 Supports two modes:
@@ -186,7 +186,7 @@ MOCK_ADVERSARIAL_OUTPUT = """## Devil's Advocate 校验
 
 ### 公众监督者
 - 风险等级：高
-- 关键质疑：可能存在地方保护主义
+- 关键质疑：可能存在地方保护或行政干预
 - 舆论风险：劳动权益保障不力
 
 ### 制度设计者
@@ -235,7 +235,7 @@ async def run_e2e(case_dir: str, mock_mode: bool = True, model: str = "gpt-4"):
     t_start = time.perf_counter()
 
     logger.info("=" * 60)
-    logger.info("judicial-lint-mcp v0.2.0 端到端测试")
+    logger.info("judicial-lint-mcp v0.5.0 端到端测试")
     logger.info("案件目录: %s", case_dir)
     logger.info("模式: %s", "Mock LLM" if mock_mode else f"Live LLM ({model})")
     logger.info("=" * 60)
@@ -350,7 +350,7 @@ async def run_e2e(case_dir: str, mock_mode: bool = True, model: str = "gpt-4"):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="judicial-lint-mcp v0.2.0 本地端到端测试"
+        description="judicial-lint-mcp v0.5.0 本地端到端测试"
     )
     parser.add_argument(
         "--case-dir",

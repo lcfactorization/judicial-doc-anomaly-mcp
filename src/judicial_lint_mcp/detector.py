@@ -1,4 +1,4 @@
-"""Core detection engine for judicial document anomaly detection v0.3.0
+"""Core detection engine for judicial document anomaly detection v0.5.0
 
 Refactored: parsing logic → response_parser.py, report generation → report_builder.py
 This module retains: data models, FileLoader, DetectionEngine orchestration.
