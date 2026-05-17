@@ -23,4 +23,4 @@ pytest
 
 ## 报告问题
 
-请在 [Issues](https://github.com/Justice-and-Equity/judicial-doc-anomaly-mcp/issues) 中报告问题。
+请在 [Issues](https://github.com/lcfactorization/judicial-doc-anomaly-mcp/issues) 中报告问题。
