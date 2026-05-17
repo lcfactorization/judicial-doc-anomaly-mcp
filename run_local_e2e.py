@@ -25,12 +25,41 @@ from judicial_lint_mcp.config import AppConfig
 from judicial_lint_mcp.graph_builder import GraphBuilder
 from judicial_lint_mcp.preprocessor import Preprocessor
 from judicial_lint_mcp.quality_assessor import QualityAssessor
-from judicial_lint_mcp.server import (
-    _format_adversarial_result,
-    _format_graph_result,
-    _format_preprocess_result,
-    _format_quality_result,
-)
+
+
+def _format_preprocess_result(result):
+    lines = ["## 预处理结果", f"- 完整性评分: {result.completeness_score:.1f}", f"- 时间线条目: {len(result.timeline)}", f"- 证据索引: {len(result.evidence_index)}", f"- 诉请映射: {len(result.claims_map)}"]
+    if result.missing_items:
+        lines.append(f"- 缺失项: {', '.join(result.missing_items)}")
+    return "\n".join(lines)
+
+
+def _format_graph_result(result):
+    lines = ["## 图构建结果"]
+    if result.evidence_mermaid:
+        lines.append(f"### 证据关系图\n```mermaid\n{result.evidence_mermaid}\n```")
+    if result.procedure_mermaid:
+        lines.append(f"### 程序流程图\n```mermaid\n{result.procedure_mermaid}\n```")
+    if result.reasoning_mermaid:
+        lines.append(f"### 推理链路图\n```mermaid\n{result.reasoning_mermaid}\n```")
+    lines.append(f"- 异常路径: {len(result.anomaly_paths)}")
+    return "\n".join(lines)
+
+
+def _format_quality_result(result):
+    lines = ["## 质量评估结果", f"- 总分: {result.total_score}/100", f"- 等级: {result.grade}"]
+    return "\n".join(lines)
+
+
+def _format_adversarial_result(result):
+    lines = ["## 对抗审查结果"]
+    if result.devils_advocate_results:
+        lines.append(f"- DA校验: {len(result.devils_advocate_results)}")
+    if result.role_reviews:
+        lines.append(f"- 角色审查: {len(result.role_reviews)}")
+    if result.high_risk_points:
+        lines.append(f"- 高风险点: {len(result.high_risk_points)}")
+    return "\n".join(lines)
 
 logger = logging.getLogger("e2e-runner")
 logging.basicConfig(
