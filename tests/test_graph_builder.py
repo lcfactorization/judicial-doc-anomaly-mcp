@@ -41,7 +41,7 @@ def mock_llm_caller():
 def sample_preprocess_result():
     return PreprocessResult(
         case_info=CaseInfo(
-            case_number="（2025）苏0602民初4514号",
+            case_number="（2025）某9999民初9999号",
             case_name="张某诉某科技有限公司",
         ),
         completeness_score=75.0,

@@ -162,7 +162,7 @@ SYSTEM_PROMPT = """# 司法文书异常检测系统指令
 
 ```html
 <div style="text-indent: 0; margin-left: 0; font-weight: bold; font-size: 16px;">
-  南通市中级人民法院合议庭：
+  [匿名化市]中级人民法院合议庭：
 </div>
 ```
 

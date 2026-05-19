@@ -18,7 +18,7 @@ def sample_case_dir(tmp_path):
 
     judgment = """# 民事判决书
 
-（2025）苏0602民初4514号
+（2025）某9999民初9999号
 
 原告：张某，男，1980年1月15日生。
 被告：某科技有限公司。
@@ -54,7 +54,7 @@ def mock_llm_caller():
             json.dumps(
                 {
                     "case_info": {
-                        "case_number": "（2025）苏0602民初4514号",
+                        "case_number": "（2025）某9999民初9999号",
                         "case_name": "张某诉某科技有限公司劳动争议案",
                         "parties": ["张某", "某科技有限公司"],
                         "case_type": "劳动争议",
@@ -188,7 +188,7 @@ class TestPreprocessorRun:
         assert isinstance(result, PreprocessResult)
         assert result.completeness_score > 0
         assert len(result.timeline) > 0
-        assert result.case_info.case_number == "（2025）苏0602民初4514号"
+        assert result.case_info.case_number == "（2025）某9999民初9999号"
         assert len(result.evidence_index) == 2
         assert len(result.claims_map) == 1
         assert "庭审笔录" in result.missing_items

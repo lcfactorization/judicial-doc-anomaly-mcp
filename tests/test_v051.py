@@ -228,9 +228,9 @@ class TestAnonymization:
     def test_anonymize_phone(self):
         from judicial_lint_mcp.server import _anonymize_text
 
-        text = "联系电话：13812345678"
+        text = "联系电话：13800000000"
         result = _anonymize_text(text)
-        assert "13812345678" not in result
+        assert "13800000000" not in result
         assert "1**********" in result
 
     def test_anonymize_date(self):
@@ -243,16 +243,16 @@ class TestAnonymization:
     def test_anonymize_case_number(self):
         from judicial_lint_mcp.server import _anonymize_text
 
-        text = "（2025）苏0602民初4514号"
+        text = "（2025）某0602民初XXXX号"
         result = _anonymize_text(text)
-        assert "4514" not in result
+        assert "XXXX" not in result
 
     def test_anonymize_id_number(self):
         from judicial_lint_mcp.server import _anonymize_text
 
-        text = "身份证号：320123199001011234"
+        text = "身份证号：320123200001010000"
         result = _anonymize_text(text)
-        assert "320123199001011234" not in result
+        assert "320123200001010000" not in result
 
     def test_preserve_non_sensitive(self):
         from judicial_lint_mcp.server import _anonymize_text
@@ -483,9 +483,9 @@ class TestAnonymizationEdgeCases:
     def test_anonymize_address(self):
         from judicial_lint_mcp.server import _anonymize_text
 
-        text = "住址：江苏省南京市鼓楼区北京路100号"
+        text = "住址：某省某市某区测试路100号"
         result = _anonymize_text(text)
-        assert "北京路100号" not in result
+        assert "测试路100号" not in result
 
     def test_anonymize_preserves_structure(self):
         from judicial_lint_mcp.server import _anonymize_text
@@ -643,10 +643,10 @@ class TestCompactMaterialsAnonymize:
     def test_compact_with_anonymize(self):
         from judicial_lint_mcp.server import compact_materials
 
-        text = "原告张某，电话13812345678，案号（2025）苏0602民初4514号"
+        text = "原告张某，电话13800000000，案号（2025）某9999民初XXXX号"
         result = json.loads(compact_materials(text, max_tokens=10000, anonymize=True))
         assert result["anonymized"] is True
-        assert "13812345678" not in result["compacted"]
+        assert "13800000000" not in result["compacted"]
 
 
 # ── Plan Pipeline + Progress Full Flow ───────────────────────

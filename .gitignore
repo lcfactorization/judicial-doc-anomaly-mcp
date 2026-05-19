@@ -43,10 +43,6 @@ ENV/
 
 # Output (generated reports, NOT documentation)
 output/
-# NOTE: Do NOT add *.md here — it blocks INSTALL_GUIDE_ZH.md, CONTRIBUTING.md, etc.
-# If you want to exclude generated report .md files, add patterns like:
-#     report_*.md
-#     */output/*.md
 
 # Testing
 .pytest_cache/
@@ -58,3 +54,13 @@ htmlcov/
 *检测报告*.json
 test_cases/*/full_report.md
 test_cases/*/evidence_result.md
+
+# Graphify cache (LLM response cache, may contain case data)
+graphify-out/
+
+# Sensitive: run_detection.py contains real case data (names, case numbers, etc.)
+run_detection.py
+
+# Sensitive: generated reports may contain PII
+reports/
+*.检测报告*.html

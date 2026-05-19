@@ -1,4 +1,4 @@
-"""Full test: run all dimensions on real 4514 case."""
+"""Full test: run all dimensions on mock case."""
 
 import asyncio
 import logging
@@ -23,7 +23,7 @@ logger = logging.getLogger("full-test")
 
 
 async def main():
-    case_dir = r"C:\Users\stere\Documents\Obsidian Vault\(2025)苏0602民初4514号"
+    case_dir = r".\test_cases\mock_role_evidence_case"
 
     config = AppConfig.from_env()
     config.detection.enable_adversarial_check = False

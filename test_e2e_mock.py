@@ -155,9 +155,9 @@ def test_pipeline_state_flow():
 
 def test_compact_materials_with_anonymize():
     materials = (
-        "原告张某，身份证号：320123199001011234，联系电话13812345678，"
-        "住址江苏省南京市鼓楼区北京路100号。\n"
-        "案号（2025）苏0602民初4514号，入职日期2023-01-15。\n"
+        "原告张某，身份证号：320123200001010000，联系电话13800000000，"
+        "住址某省某市某区测试路100号。\n"
+        "案号（2025）某9999民初9999号，入职日期2023-01-15。\n"
         "原告主张加班工资50000元。"
     )
 
@@ -165,8 +165,8 @@ def test_compact_materials_with_anonymize():
     data = json.loads(result)
 
     assert data["anonymized"] is True
-    assert "13812345678" not in data["compacted"]
-    assert "320123199001011234" not in data["compacted"]
+    assert "13800000000" not in data["compacted"]
+    assert "320123200001010000" not in data["compacted"]
     assert "加班工资" in data["compacted"]
 
     print("✅ 材料压缩+脱敏测试通过")
