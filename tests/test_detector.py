@@ -6,6 +6,7 @@ import pytest
 
 from judicial_lint_mcp.config import AppConfig, DetectionConfig, LLMConfig
 from judicial_lint_mcp.detector import DetectionEngine, DetectionResult, FileLoader
+from judicial_lint_mcp.response_parser import ResponseParser
 
 
 @pytest.fixture
@@ -122,19 +123,12 @@ class TestDetectionEngine:
             assert result.completeness_score > 0
 
     def test_parse_dimension_result(self, mock_config):
-        """Test parsing of dimension results"""
-        engine = DetectionEngine(mock_config)
+        """Test parsing of dimension results via ResponseParser"""
+        parser = ResponseParser()
 
-        response = """
-发现以下异常：
+        response = "\n#### 1. 异常项：举证责任分配错误\n- **具体表现**：法院将本应由用人单位承担的举证责任转由劳动者承担\n- **指向获益方**：被告\n- **异常程度**：高度可能"
 
-1. 举证责任分配错误
-法院将本应由用人单位承担的举证责任转由劳动者承担。
-
-2. 证据未评价
-对原告提交的劳动合同原件未作任何评价。
-"""
-        result = engine._parse_dimension_result("evidence", response)
+        result = parser.parse_dimension_result("evidence", response)
 
         assert result.dimension == "evidence"
         assert len(result.anomalies) > 0

@@ -1,4 +1,4 @@
-"""Core detection engine for judicial document anomaly detection v0.5.0
+"""Core detection engine for judicial document anomaly detection v0.5.1
 
 Refactored: parsing logic → response_parser.py, report generation → report_builder.py
 This module retains: data models, FileLoader, DetectionEngine orchestration.
@@ -99,7 +99,7 @@ class DetectionEngine:
         self.context_history: list[dict] = []
         self.total_tokens_used = 0
         self.parser = ResponseParser()
-        self.report_builder = ReportBuilder(self.llm)
+        self.report_builder = ReportBuilder()
 
     async def run_detection(
         self,
@@ -202,7 +202,7 @@ class DetectionEngine:
         result.remedies = self._generate_remedies(dimension_results)
 
         result.total_tokens_used = self.total_tokens_used
-        result.report_markdown = await self.report_builder.build_report(result)
+        result.report_markdown = self.report_builder.build_report(result)
         logger.info("DetectionEngine: 报告生成完成, 总字符数=%d, 总token=%d", len(result.report_markdown), result.total_tokens_used)
         logger.info("=" * 60)
 

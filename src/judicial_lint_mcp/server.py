@@ -1,4 +1,4 @@
-"""MCP Server v0.5.0 — Bridge Architecture with Long-Context Support.
+"""MCP Server v0.5.1 — Bridge Architecture with Long-Context Support.
 
 MCP Server is a BRIDGE between AI Agents and Skills.
 It does NOT call any LLM. It only:
@@ -8,25 +8,27 @@ It does NOT call any LLM. It only:
   4. Manages Skill discovery, pipeline definitions, and Skill file updates
   5. Provides token estimation, material compaction, and pipeline state management
 
-v0.5.0 changes (inspired by claude-code's long-context handling):
-  - estimate_tokens: let Agent budget before calling render_skill
-  - plan_pipeline: returns metadata only (NOT full prompts) to avoid context overflow
-  - compact_materials: compress case materials to fit token budget
-  - pipeline state: track progress, support resume from breakpoint
-  - render_skill: unchanged, but Agent should call one-at-a-time
-
-Agent decides what to call, in what order, with what parameters.
-Agent calls its own LLM with the prompts returned by this server.
+v0.5.1 changes:
+  - PipelineStateManager: thread-safe, TTL-expiring, file-persisted state (fixes memory leak & crash recovery)
+  - Token estimation: mixed CJK/Latin heuristic instead of flat 2.0 ratio
+  - Structured error codes: ErrorCode enum + make_error() with retryable flag
+  - Anti-Laziness directive injected into plan_pipeline output
+  - JSON parse_response: robust regex extraction + self-correction feedback on failure
+  - compact_materials: anonymize option for data desensitization
+  - Audit trail: every tool call logged with session_id for traceability
 """
 
 import json
 import logging
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from .error_codes import ErrorCode, make_error
+from .pipeline_state import PipelineStateManager
 from .report_builder import ReportBuilder
 from .response_parser import ResponseParser
 from .skill_runner import SkillLoader, TemplateRenderer
@@ -45,13 +47,40 @@ _builder = ReportBuilder()
 _loader = SkillLoader()
 _renderer = TemplateRenderer(_loader)
 
-_pipeline_state: dict[str, dict] = {}
+_state_mgr = PipelineStateManager()
+_audit_lock = threading.Lock()
+_audit_log: list[dict] = []
 
-_CHARS_PER_TOKEN = 2.0
+
+def _record_audit(session_id: str, tool: str, action: str, detail: str = "") -> None:
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "session_id": session_id,
+        "tool": tool,
+        "action": action,
+        "detail": detail,
+    }
+    with _audit_lock:
+        _audit_log.append(entry)
 
 
 def _estimate_tokens(text: str) -> int:
-    return int(len(text) / _CHARS_PER_TOKEN)
+    if not text:
+        return 0
+    cjk = len(re.findall(r'[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]', text))
+    total_chars = len(text)
+    non_cjk = total_chars - cjk
+    return int(cjk / 1.5 + non_cjk / 4.0)
+
+
+ANTI_LAZINESS_DIRECTIVE = (
+    "\n\n---\n"
+    "**⚠️ Anti-Laziness 指令（必须遵守）**：\n"
+    "你必须在当前对话轮次中，静默且完整地调用完所有维度的 render_skill 和 parse_response，"
+    "绝对不允许中途停顿、询问用户是否继续、或以'操作同理'等理由省略任何维度。"
+    "每完成一个维度，立即调用下一个，直到全部完成后再调用 build_report。\n"
+    "---\n"
+)
 
 
 # ── MCP Resources ──────────────────────────────────────────────
@@ -172,9 +201,12 @@ def estimate_tokens(
         }
         return json.dumps(result, ensure_ascii=False, indent=2)
 
+    except FileNotFoundError as e:
+        logger.error("estimate_tokens: skill not found: %s", e)
+        return make_error(ErrorCode.SKILL_NOT_FOUND, f"Skill 不存在：{e}", {"skill_name": skill_name})
     except Exception as e:
         logger.error("estimate_tokens: %s", e, exc_info=True)
-        return json.dumps({"error": f"估算异常：{e}"}, ensure_ascii=False)
+        return make_error(ErrorCode.INTERNAL_ERROR, f"估算异常：{e}")
 
 
 @mcp.tool()
@@ -182,6 +214,7 @@ def compact_materials(
     materials: str,
     max_tokens: int = 40000,
     strategy: str = "extract_key_facts",
+    anonymize: bool = False,
 ) -> str:
     """压缩案件材料以适配 token 预算。
 
@@ -194,6 +227,7 @@ def compact_materials(
       - 'extract_key_facts': 提取关键事实和争议焦点（默认，适合检测用）
       - 'truncate': 简单截断到目标长度
       - 'outline': 保留文档结构大纲，删除详细内容
+    anonymize: 是否自动脱敏（替换人名/地址/案号等敏感信息，默认 False）
 
     返回 JSON 字符串，包含：
     - compacted: 压缩后的文本
@@ -201,10 +235,14 @@ def compact_materials(
     - compacted_tokens: 压缩后 token 估算
     - compression_ratio: 压缩比
     - strategy_used: 实际使用的策略
+    - anonymized: 是否执行了脱敏
     """
     try:
+        if anonymize:
+            materials = _anonymize_text(materials)
+
         original_tokens = _estimate_tokens(materials)
-        max_chars = int(max_tokens * _CHARS_PER_TOKEN)
+        max_chars = int(max_tokens * 2.0)
 
         if original_tokens <= max_tokens:
             return json.dumps({
@@ -213,6 +251,7 @@ def compact_materials(
                 "compacted_tokens": original_tokens,
                 "compression_ratio": 1.0,
                 "strategy_used": "none_needed",
+                "anonymized": anonymize,
             }, ensure_ascii=False)
 
         if strategy == "truncate":
@@ -233,12 +272,13 @@ def compact_materials(
             "compacted_tokens": compacted_tokens,
             "compression_ratio": round(ratio, 2),
             "strategy_used": strategy,
+            "anonymized": anonymize,
         }
         return json.dumps(result, ensure_ascii=False, indent=2)
 
     except Exception as e:
         logger.error("compact_materials: %s", e, exc_info=True)
-        return json.dumps({"error": f"压缩异常：{e}"}, ensure_ascii=False)
+        return make_error(ErrorCode.INTERNAL_ERROR, f"压缩异常：{e}")
 
 
 @mcp.tool()
@@ -248,7 +288,7 @@ def plan_pipeline(
 ) -> str:
     """规划流水线执行计划，返回 Skill 元数据列表（不含完整提示词）。
 
-    v0.5.0: 替代旧版 render_pipeline（会一次性返回所有 Skill 的完整提示词，
+    v0.5.1: 替代旧版 render_pipeline（会一次性返回所有 Skill 的完整提示词，
     导致长上下文溢出）。Agent 应根据此计划逐个调用 render_skill。
 
     pipeline_name: 流水线名称（如 'full_scan'、'evidence_focus'、'quick_scan'）
@@ -309,13 +349,15 @@ def plan_pipeline(
             execution_hint = "batch_5"
 
         session_id = datetime.now().strftime("%Y%m%d%H%M%S")
-        _pipeline_state[session_id] = {
+        initial_state = {
             "pipeline": pipeline_name,
             "skills": skill_refs,
             "completed": [],
             "current_index": 0,
             "results": {},
         }
+        _state_mgr.save(session_id, initial_state)
+        _record_audit(session_id, "plan_pipeline", "created", f"pipeline={pipeline_name}, skills={len(skill_refs)}")
 
         result = {
             "pipeline": pipeline_name,
@@ -324,15 +366,16 @@ def plan_pipeline(
             "total_estimated_tokens": total_tokens,
             "execution_hint": execution_hint,
             "session_id": session_id,
+            "anti_laziness_directive": ANTI_LAZINESS_DIRECTIVE,
         }
         return json.dumps(result, ensure_ascii=False, indent=2)
 
     except FileNotFoundError as e:
         logger.error("plan_pipeline: %s", e)
-        return json.dumps({"error": f"流水线不存在：{e}"}, ensure_ascii=False)
+        return make_error(ErrorCode.PIPELINE_NOT_FOUND, f"流水线不存在：{e}", {"pipeline_name": pipeline_name})
     except Exception as e:
         logger.error("plan_pipeline: %s", e, exc_info=True)
-        return json.dumps({"error": f"规划异常：{e}"}, ensure_ascii=False)
+        return make_error(ErrorCode.INTERNAL_ERROR, f"规划异常：{e}")
 
 
 @mcp.tool()
@@ -366,14 +409,13 @@ def pipeline_progress(
     - remaining_skills: 剩余 Skill 列表（action='resume' 时）
     """
     try:
-        if session_id not in _pipeline_state:
-            return json.dumps({"error": f"会话不存在：{session_id}"}, ensure_ascii=False)
-
-        state = _pipeline_state[session_id]
+        state = _state_mgr.get(session_id)
+        if state is None:
+            return make_error(ErrorCode.SESSION_NOT_FOUND, f"会话不存在或已过期：{session_id}", {"session_id": session_id})
 
         if action == "complete":
             if not skill_name:
-                return json.dumps({"error": "action='complete' 需要 skill_name"}, ensure_ascii=False)
+                return make_error(ErrorCode.INVALID_PARAMS, "action='complete' 需要 skill_name")
             if skill_name not in state["completed"]:
                 state["completed"].append(skill_name)
             if result_summary:
@@ -382,12 +424,16 @@ def pipeline_progress(
                 state["skills"].index(skill_name) + 1 if skill_name in state["skills"] else state["current_index"],
                 len(state["skills"]),
             )
+            _state_mgr.save(session_id, state)
+            _record_audit(session_id, "pipeline_progress", "complete", f"skill={skill_name}")
             logger.info("pipeline_progress: 完成 skill=%s, 进度=%d/%d", skill_name, len(state["completed"]), len(state["skills"]))
 
         elif action == "reset":
             state["completed"] = []
             state["current_index"] = 0
             state["results"] = {}
+            _state_mgr.save(session_id, state)
+            _record_audit(session_id, "pipeline_progress", "reset")
             logger.info("pipeline_progress: 重置 session=%s", session_id)
 
         remaining = [s for s in state["skills"] if s not in state["completed"]]
@@ -410,7 +456,7 @@ def pipeline_progress(
 
     except Exception as e:
         logger.error("pipeline_progress: %s", e, exc_info=True)
-        return json.dumps({"error": f"进度管理异常：{e}"}, ensure_ascii=False)
+        return make_error(ErrorCode.STATE_ERROR, f"进度管理异常：{e}")
 
 
 @mcp.tool()
@@ -464,10 +510,10 @@ def render_skill(
 
     except FileNotFoundError as e:
         logger.error("render_skill: Skill 不存在: %s", e)
-        return json.dumps({"error": f"Skill 不存在：{e}"}, ensure_ascii=False)
+        return make_error(ErrorCode.SKILL_NOT_FOUND, f"Skill 不存在：{e}", {"skill_name": skill_name})
     except Exception as e:
         logger.error("render_skill: %s", e, exc_info=True)
-        return json.dumps({"error": f"渲染异常：{e}"}, ensure_ascii=False)
+        return make_error(ErrorCode.RENDER_FAILED, f"渲染异常：{e}", {"skill_name": skill_name})
 
 
 @mcp.tool()
@@ -530,10 +576,10 @@ def render_pipeline(
 
     except FileNotFoundError as e:
         logger.error("render_pipeline: %s", e)
-        return json.dumps({"error": f"流水线不存在：{e}"}, ensure_ascii=False)
+        return make_error(ErrorCode.PIPELINE_NOT_FOUND, f"流水线不存在：{e}", {"pipeline_name": pipeline_name})
     except Exception as e:
         logger.error("render_pipeline: %s", e, exc_info=True)
-        return json.dumps({"error": f"渲染异常：{e}"}, ensure_ascii=False)
+        return make_error(ErrorCode.RENDER_FAILED, f"渲染异常：{e}", {"pipeline_name": pipeline_name})
 
 
 @mcp.tool()
@@ -575,16 +621,28 @@ def parse_response(
                     "f_code": a.f_code,
                     "a_code": a.a_code,
                     "original_text": a.original_text,
+                    "original_text_location": getattr(a, "original_text_location", ""),
+                    "evidence_reference": getattr(a, "evidence_reference", ""),
                     "legal_analysis": a.legal_analysis,
+                    "legal_basis": getattr(a, "legal_basis", ""),
+                    "suggestion": getattr(a, "suggestion", ""),
+                    "deduction": getattr(a, "deduction", 0),
                 }
                 for a in dim_result.anomalies
             ],
         }
         return json.dumps(result, ensure_ascii=False, indent=2)
 
+    except json.JSONDecodeError as e:
+        logger.error("parse_response: JSON 解析失败: %s", e)
+        return make_error(ErrorCode.PARSE_FAILED, f"JSON 解析失败，请修复格式后重新调用", {
+            "dimension": dimension,
+            "error_detail": str(e),
+            "retryable": True,
+        })
     except Exception as e:
         logger.error("parse_response: %s", e, exc_info=True)
-        return json.dumps({"error": f"解析异常：{e}"}, ensure_ascii=False)
+        return make_error(ErrorCode.PARSE_FAILED, f"解析异常：{e}", {"dimension": dimension})
 
 
 @mcp.tool()
@@ -630,7 +688,12 @@ def build_report(
                     f_code=a_data.get("f_code", ""),
                     a_code=a_data.get("a_code", ""),
                     original_text=a_data.get("original_text", ""),
+                    original_text_location=a_data.get("original_text_location", ""),
+                    evidence_reference=a_data.get("evidence_reference", ""),
                     legal_analysis=a_data.get("legal_analysis", ""),
+                    legal_basis=a_data.get("legal_basis", ""),
+                    suggestion=a_data.get("suggestion", ""),
+                    deduction=a_data.get("deduction", 0),
                 ))
                 logger.info(
                     "build_report: 异常项 item=%s, beneficiary=%s, confidence=%s, f_code=%s",
@@ -658,10 +721,87 @@ def build_report(
 
     except json.JSONDecodeError as e:
         logger.error("build_report: JSON 解析失败: %s", e)
-        return f"# 错误\nJSON 解析失败：{e}"
+        return make_error(ErrorCode.PARSE_FAILED, f"JSON 解析失败：{e}", {"case_name": case_name})
     except Exception as e:
         logger.error("build_report: %s", e, exc_info=True)
-        return f"# 错误\n报告生成异常：{e}"
+        return make_error(ErrorCode.INTERNAL_ERROR, f"报告生成异常：{e}", {"case_name": case_name})
+
+
+@mcp.tool()
+def build_report_html(
+    case_name: str,
+    dimension_results_json: str,
+    doc_type: str = "判决书",
+    model_name: str = "AI Agent",
+) -> str:
+    """从结构化异常数据生成精美的 HTML 格式检测报告（支持 dark/light 主题切换）。
+
+    参数与 build_report 完全一致，输出为自包含的 HTML 页面。
+    当用户明确要求 HTML 格式报告时使用此工具，默认使用 build_report 生成 Markdown。
+
+    case_name: 案件名称
+    dimension_results_json: JSON 字符串，包含所有维度的解析结果列表
+        格式：[{"dimension": "procedure", "anomalies": [...], "risk_level": "high", "summary": "..."}, ...]
+    doc_type: 文书类型（默认 '判决书'）
+    model_name: 使用的模型名称（默认 'AI Agent'）
+
+    返回自包含的 HTML 页面字符串，可直接保存为 .html 文件在浏览器中查看。
+    """
+    try:
+        from .models import AnomalyItem, DetectionResult, DimensionResult
+
+        logger.info("build_report_html: 开始 case=%s", case_name)
+        dim_data_list = json.loads(dimension_results_json)
+        dimension_results = []
+
+        for dim_data in dim_data_list:
+            anomalies = []
+            for a_data in dim_data.get("anomalies", []):
+                raw_conf = a_data.get("confidence", "medium")
+                if isinstance(raw_conf, (int, float)):
+                    raw_conf = "high" if raw_conf >= 0.8 else ("medium" if raw_conf >= 0.5 else "low")
+                anomalies.append(AnomalyItem(
+                    dimension=dim_data["dimension"],
+                    item_name=a_data.get("item_name", ""),
+                    description=a_data.get("description", ""),
+                    beneficiary=a_data.get("beneficiary", ""),
+                    confidence=str(raw_conf),
+                    f_code=a_data.get("f_code", ""),
+                    a_code=a_data.get("a_code", ""),
+                    original_text=a_data.get("original_text", ""),
+                    original_text_location=a_data.get("original_text_location", ""),
+                    evidence_reference=a_data.get("evidence_reference", ""),
+                    legal_analysis=a_data.get("legal_analysis", ""),
+                    legal_basis=a_data.get("legal_basis", ""),
+                    suggestion=a_data.get("suggestion", ""),
+                    deduction=a_data.get("deduction", 0),
+                ))
+
+            dimension_results.append(DimensionResult(
+                dimension=dim_data["dimension"],
+                anomalies=anomalies,
+                summary=dim_data.get("summary", ""),
+                risk_level=dim_data.get("risk_level", "low"),
+            ))
+
+        detection_result = DetectionResult(
+            case_name=case_name,
+            doc_type=doc_type,
+            model_name=model_name,
+            detection_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            dimension_results=dimension_results,
+        )
+
+        html_report = _builder.build_html_report(detection_result)
+        logger.info("build_report_html: 报告生成完成, 长度=%d", len(html_report))
+        return html_report
+
+    except json.JSONDecodeError as e:
+        logger.error("build_report_html: JSON 解析失败: %s", e)
+        return make_error(ErrorCode.PARSE_FAILED, f"JSON 解析失败：{e}", {"case_name": case_name})
+    except Exception as e:
+        logger.error("build_report_html: %s", e, exc_info=True)
+        return make_error(ErrorCode.INTERNAL_ERROR, f"HTML报告生成异常：{e}", {"case_name": case_name})
 
 
 @mcp.tool()
@@ -873,6 +1013,158 @@ def _parse_pipeline_skills(body: str) -> list[str]:
                 skills.append(skill_name)
     logger.info("_parse_pipeline_skills: 解析到 %d 个 skill: %s", len(skills), skills)
     return skills
+
+
+def _anonymize_text(text: str) -> str:
+    text = re.sub(r'[\u4e00-\u9fff]{2,4}(?=（|[(]|先生|女士|同志|律师|法官|审判长|审判员|代理)', '某甲', text)
+    text = re.sub(r'(身份证号[：:]?\s*)\d{6}[\dXx]{8,12}', r'\1****', text)
+    text = re.sub(r'(住址[：:]?\s*)[\u4e00-\u9fff]+省[\u4e00-\u9fff]+市[\u4e00-\u9fff]+区[\u4e00-\u9fff]+路\d+号', r'\1某地', text)
+    text = re.sub(r'（\d{4}）\S*号', '（****）某号', text)
+    text = re.sub(r'\d{4}[-/]\d{2}[-/]\d{2}', '****-**-**', text)
+    text = re.sub(r'1[3-9]\d{9}', '1**********', text)
+    return text
+
+
+@mcp.tool()
+def get_audit_trail(
+    session_id: str | None = None,
+    limit: int = 50,
+) -> str:
+    """查询审查留痕日志，追踪工具调用链路。
+
+    session_id: 可选，按会话 ID 筛选
+    limit: 返回条目数上限（默认 50）
+
+    返回 JSON 字符串，包含审计日志列表。
+    """
+    try:
+        with _audit_lock:
+            entries = list(_audit_log)
+        if session_id:
+            entries = [e for e in entries if e.get("session_id") == session_id]
+        entries = entries[-limit:]
+        return json.dumps({"audit_trail": entries, "total": len(entries)}, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error("get_audit_trail: %s", e, exc_info=True)
+        return make_error(ErrorCode.INTERNAL_ERROR, f"审计日志查询异常：{e}")
+
+
+@mcp.tool()
+def debug_render(
+    skill_name: str,
+    variables: dict | None = None,
+    show_diff: bool = False,
+) -> str:
+    """调试模式：展示 Skill 渲染的中间过程，帮助排查模板变量替换和输出问题。
+
+    当 render_skill 的输出不符合预期时，使用此工具查看渲染前后的差异。
+
+    skill_name: Skill 名称（如 'dimensions/02_evidence'）
+    variables: 模板变量字典
+    show_diff: 是否显示渲染前后差异（默认 False）
+
+    返回 JSON 字符串，包含：
+    - skill_name: Skill 名称
+    - template_raw: 原始模板文本（渲染前）
+    - template_rendered: 渲染后文本
+    - variables_provided: 提供的变量列表
+    - variables_unresolved: 未解析的变量占位符列表
+    - diff: 渲染前后差异（仅 show_diff=True 时）
+    """
+    try:
+        meta, body = _loader.load(skill_name)
+        raw_body = body
+        rendered = _renderer.render(body, variables)
+
+        unresolved = re.findall(r'\{\{(\w+)\}\}', rendered)
+
+        result = {
+            "skill_name": meta.name,
+            "skill_title": meta.title,
+            "template_raw_length": len(raw_body),
+            "template_rendered_length": len(rendered),
+            "variables_provided": list(variables.keys()) if variables else [],
+            "variables_unresolved": unresolved,
+        }
+
+        if show_diff:
+            diff_parts = []
+            raw_lines = raw_body.splitlines()
+            rendered_lines = rendered.splitlines()
+            for i, (raw, rend) in enumerate(zip(raw_lines, rendered_lines)):
+                if raw != rend:
+                    diff_parts.append({
+                        "line": i + 1,
+                        "before": raw[:200],
+                        "after": rend[:200],
+                    })
+            result["diff"] = diff_parts[:50]
+            result["diff_count"] = len(diff_parts)
+
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    except FileNotFoundError as e:
+        return make_error(ErrorCode.SKILL_NOT_FOUND, f"Skill 不存在：{e}", {"skill_name": skill_name})
+    except Exception as e:
+        logger.error("debug_render: %s", e, exc_info=True)
+        return make_error(ErrorCode.RENDER_FAILED, f"调试渲染异常：{e}", {"skill_name": skill_name})
+
+
+@mcp.tool()
+def render_skill_batch(
+    skill_names: list[str],
+    variables: dict | None = None,
+) -> str:
+    """批量渲染多个 Skill 模板，适合短文档场景以减少网络往返。
+
+    仅建议在 estimate_tokens 显示总 token < 80000 时使用。
+    长文档请使用 plan_pipeline + render_skill 逐个调用。
+
+    skill_names: Skill 名称列表（如 ['dimensions/01_procedure', 'dimensions/02_evidence']）
+    variables: 模板变量字典
+
+    返回 JSON 字符串，包含所有 Skill 的渲染结果列表。
+    """
+    try:
+        results = []
+        total_chars = 0
+        for sn in skill_names:
+            meta, body = _loader.load(sn)
+            rendered = _renderer.render(body, variables)
+            system_prompt = _build_system_prompt(meta)
+            total_chars += len(system_prompt) + len(rendered)
+            results.append({
+                "skill_name": meta.name,
+                "skill_title": meta.title,
+                "system_prompt": system_prompt,
+                "user_prompt": rendered,
+                "meta": {
+                    "type": meta.type,
+                    "layer": meta.layer,
+                    "order": meta.order,
+                    "depends_on": meta.depends_on,
+                    "output_format": meta.output_format,
+                },
+            })
+
+        total_tokens = _estimate_tokens(" " * total_chars)
+        if total_tokens > 120_000:
+            return make_error(ErrorCode.TOKEN_OVERFLOW, f"批量渲染总 token={total_tokens} 超限，请改用逐个调用", {
+                "total_tokens": total_tokens,
+                "skill_count": len(skill_names),
+            })
+
+        return json.dumps({
+            "skills": results,
+            "total_skills": len(results),
+            "total_estimated_tokens": total_tokens,
+        }, ensure_ascii=False, indent=2)
+
+    except FileNotFoundError as e:
+        return make_error(ErrorCode.SKILL_NOT_FOUND, f"Skill 不存在：{e}", {"skill_names": skill_names})
+    except Exception as e:
+        logger.error("render_skill_batch: %s", e, exc_info=True)
+        return make_error(ErrorCode.RENDER_FAILED, f"批量渲染异常：{e}")
 
 
 def main():

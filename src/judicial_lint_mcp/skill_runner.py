@@ -1,6 +1,6 @@
 """Skill Loader & Template Renderer — loads SKILL.md files, renders templates.
 
-v0.5.0 bridge architecture: NO LLM calls.
+v0.5.1 bridge architecture: NO LLM calls.
 This module only provides SkillLoader (file I/O) and TemplateRenderer (variable substitution).
 LLM calling is the Agent's responsibility.
 """

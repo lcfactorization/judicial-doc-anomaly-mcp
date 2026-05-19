@@ -1,6 +1,6 @@
 """Data models for judicial document anomaly detection.
 
-Extracted from detector.py in v0.3.0 to break circular imports. Current version: v0.5.0.
+Extracted from detector.py in v0.3.0 to break circular imports. Current version: v0.5.1.
 """
 
 from pydantic import BaseModel
@@ -13,11 +13,21 @@ class AnomalyItem(BaseModel):
     beneficiary: str = ""
     confidence: str = "medium"
     original_text: str = ""
+    original_text_location: str = ""
+    evidence_reference: str = ""
     legal_analysis: str = ""
+    legal_basis: str = ""
     f_code: str = ""
     a_code: str = ""
     reverse_check: str = ""
     net_anomaly: str = ""
+    alternative_explanation: str = ""
+    q1_alternative: str = ""
+    q2_subjective_intent: str = ""
+    q3_contradictory_evidence: str = ""
+    conclusion: str = ""
+    suggestion: str = ""
+    deduction: float = 0
 
 
 class DimensionResult(BaseModel):

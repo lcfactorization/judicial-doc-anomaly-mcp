@@ -1,6 +1,6 @@
 """Response parser — extract structured anomaly items from LLM/Agent responses.
 
-v0.5.0 bridge architecture: simplified terminology handling.
+v0.5.1 bridge architecture: simplified terminology handling.
 Removes hardcoded beneficiary normalization — Agent/LLM handles terminology
 based on document context (仲裁/一审/二审/行政执法).
 Only keeps core text parsing logic.
@@ -24,6 +24,8 @@ class ResponseParser:
 
     def parse_dimension_result(self, dim: str, response: str, dim_index: int = 0) -> DimensionResult:
         logger.info("parse_dimension_result: 维度 %s, dim_index=%d, 响应长度=%d", dim, dim_index, len(response))
+
+        response = self._strip_json_wrapper(response)
 
         result = DimensionResult(dimension=dim)
 
@@ -75,7 +77,32 @@ class ResponseParser:
 
             anomaly.legal_analysis = self._extract_field(section, r"法理分析\*?\*?[：:]", 3000)
 
+            anomaly.legal_basis = self._extract_field(section, r"法律依据\*?\*?[：:]", 2000)
+
             anomaly.original_text = self._extract_field(section, r"原文(?:引用|定位)\*?\*?[：:]", 2000)
+
+            anomaly.original_text_location = self._extract_field(section, r"原文定位\*?\*?[：:]", 1000)
+            if not anomaly.original_text_location:
+                anomaly.original_text_location = self._extract_field(section, r"出处\*?\*?[：:]", 1000)
+
+            anomaly.evidence_reference = self._extract_field(section, r"证据对照\*?\*?[：:]", 2000)
+            if not anomaly.evidence_reference:
+                anomaly.evidence_reference = self._extract_field(section, r"证据(?:引用|参考|依据)\*?\*?[：:]", 2000)
+
+            anomaly.suggestion = self._extract_field(section, r"(?:修复|改进|纠正|建议)\*?\*?[：:]", 2000)
+
+            anomaly.alternative_explanation = self._extract_field(section, r"替代解释\*?\*?[：:]", 2000)
+
+            anomaly.q1_alternative = self._extract_field(section, r"Q1[（(]替代解释[)）]\*?\*?[：:]", 1000)
+            anomaly.q2_subjective_intent = self._extract_field(section, r"Q2[（(]排除主观故意[)）]\*?\*?[：:]", 1000)
+            anomaly.q3_contradictory_evidence = self._extract_field(section, r"Q3[（(]相反证据[)）]\*?\*?[：:]", 1000)
+
+            anomaly.conclusion = self._extract_field(section, r"(?:校验|对抗)结论\*?\*?[：:]", 1000)
+            anomaly.net_anomaly = self._extract_field(section, r"净异常判定\*?\*?[：:]", 500)
+
+            ded_match = re.search(r"扣分[：:]\s*[-−]?(\d+(?:\.\d+)?)", section)
+            if ded_match:
+                anomaly.deduction = float(ded_match.group(1))
 
             if meta.get("beneficiary"):
                 anomaly.beneficiary = meta["beneficiary"].strip()[:30]
@@ -166,6 +193,37 @@ class ResponseParser:
             if b_m2 and "beneficiary" not in result:
                 result["beneficiary"] = b_m2.group(1).strip()
         return result
+
+    def _strip_json_wrapper(self, text: str) -> str:
+        stripped = text.strip()
+        fence_match = re.match(r'^```(?:json)?\s*\n(.*?)\n```\s*$', stripped, re.DOTALL)
+        if fence_match:
+            inner = fence_match.group(1).strip()
+            try:
+                import json
+                obj = json.loads(inner)
+                if isinstance(obj, dict):
+                    for key in ("content", "response", "result", "text", "output"):
+                        if key in obj and isinstance(obj[key], str):
+                            return obj[key]
+                    return json.dumps(obj, ensure_ascii=False, indent=2)
+                elif isinstance(obj, list):
+                    return json.dumps(obj, ensure_ascii=False, indent=2)
+                return inner
+            except (json.JSONDecodeError, ValueError):
+                return inner
+        json_match = re.match(r'^\{[\s\S]*\}$', stripped)
+        if json_match:
+            try:
+                import json
+                obj = json.loads(stripped)
+                if isinstance(obj, dict):
+                    for key in ("content", "response", "result", "text", "output"):
+                        if key in obj and isinstance(obj[key], str):
+                            return obj[key]
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return text
 
     def _extract_field(self, text: str, pattern: str, max_len: int = 2000) -> str:
         boundary = rf"(?={self._FIELD_BOUNDARY}|{self._FIELD_BOUNDARY_ALT}|\n####|\n###|\Z)"

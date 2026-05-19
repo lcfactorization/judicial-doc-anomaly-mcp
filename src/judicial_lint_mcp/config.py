@@ -1,4 +1,4 @@
-"""Configuration management for judicial-lint-mcp v0.5.0"""
+"""Configuration management for judicial-lint-mcp v0.5.1"""
 
 import os
 from pathlib import Path
