@@ -28,6 +28,8 @@ class AnomalyItem(BaseModel):
     conclusion: str = ""
     suggestion: str = ""
     deduction: float = 0
+    stage_scope: str = ""
+    stage_unclear: bool = False
 
 
 class DimensionResult(BaseModel):
@@ -40,6 +42,7 @@ class DimensionResult(BaseModel):
 class DetectionResult(BaseModel):
     case_name: str = ""
     doc_type: str = ""
+    trial_stage: str = ""
     model_name: str = ""
     detection_time: str = ""
     completeness_score: float = 0.0

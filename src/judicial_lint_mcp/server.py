@@ -627,6 +627,8 @@ def parse_response(
                     "legal_basis": getattr(a, "legal_basis", ""),
                     "suggestion": getattr(a, "suggestion", ""),
                     "deduction": getattr(a, "deduction", 0),
+                    "stage_scope": getattr(a, "stage_scope", ""),
+                    "stage_unclear": getattr(a, "stage_unclear", False),
                 }
                 for a in dim_result.anomalies
             ],
@@ -651,6 +653,7 @@ def build_report(
     dimension_results_json: str,
     doc_type: str = "判决书",
     model_name: str = "AI Agent",
+    trial_stage: str = "",
 ) -> str:
     """从结构化异常数据生成格式化的 Markdown 检测报告。
     AI Agent 收集完所有维度的解析结果后，调用此工具生成最终报告。
@@ -660,15 +663,20 @@ def build_report(
         格式：[{"dimension": "procedure", "anomalies": [...], "risk_level": "high", "summary": "..."}, ...]
     doc_type: 文书类型（默认 '判决书'）
     model_name: 使用的模型名称（默认 'AI Agent'）
+    trial_stage: 审级（'一审'/'二审'/'再审'/'仲裁'/'行政'/'未知'，为空时自动从案号推断）
 
     返回格式化的 Markdown 报告文本。
     """
     try:
         from .models import AnomalyItem, DetectionResult, DimensionResult
 
-        logger.info("build_report: 开始 case=%s, doc_type=%s, model=%s", case_name, doc_type, model_name)
+        logger.info("build_report: 开始 case=%s, doc_type=%s, model=%s, trial_stage=%s", case_name, doc_type, model_name, trial_stage)
         dim_data_list = json.loads(dimension_results_json)
         logger.info("build_report: 解析到 %d 个维度数据", len(dim_data_list))
+
+        if not trial_stage:
+            trial_stage = _infer_trial_stage(case_name)
+            logger.info("build_report: 自动推断审级 trial_stage=%s", trial_stage)
         dimension_results = []
 
         for dim_data in dim_data_list:
@@ -694,6 +702,8 @@ def build_report(
                     legal_basis=a_data.get("legal_basis", ""),
                     suggestion=a_data.get("suggestion", ""),
                     deduction=a_data.get("deduction", 0),
+                    stage_scope=a_data.get("stage_scope", ""),
+                    stage_unclear=a_data.get("stage_unclear", False),
                 ))
                 logger.info(
                     "build_report: 异常项 item=%s, beneficiary=%s, confidence=%s, f_code=%s",
@@ -710,6 +720,7 @@ def build_report(
         detection_result = DetectionResult(
             case_name=case_name,
             doc_type=doc_type,
+            trial_stage=trial_stage,
             model_name=model_name,
             detection_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             dimension_results=dimension_results,
@@ -733,6 +744,7 @@ def build_report_html(
     dimension_results_json: str,
     doc_type: str = "判决书",
     model_name: str = "AI Agent",
+    trial_stage: str = "",
 ) -> str:
     """从结构化异常数据生成精美的 HTML 格式检测报告（支持 dark/light 主题切换）。
 
@@ -744,15 +756,19 @@ def build_report_html(
         格式：[{"dimension": "procedure", "anomalies": [...], "risk_level": "high", "summary": "..."}, ...]
     doc_type: 文书类型（默认 '判决书'）
     model_name: 使用的模型名称（默认 'AI Agent'）
+    trial_stage: 审级（'一审'/'二审'/'再审'/'仲裁'/'行政'/'未知'，为空时自动从案号推断）
 
     返回自包含的 HTML 页面字符串，可直接保存为 .html 文件在浏览器中查看。
     """
     try:
         from .models import AnomalyItem, DetectionResult, DimensionResult
 
-        logger.info("build_report_html: 开始 case=%s", case_name)
+        logger.info("build_report_html: 开始 case=%s, trial_stage=%s", case_name, trial_stage)
         dim_data_list = json.loads(dimension_results_json)
         dimension_results = []
+
+        if not trial_stage:
+            trial_stage = _infer_trial_stage(case_name)
 
         for dim_data in dim_data_list:
             anomalies = []
@@ -775,6 +791,8 @@ def build_report_html(
                     legal_basis=a_data.get("legal_basis", ""),
                     suggestion=a_data.get("suggestion", ""),
                     deduction=a_data.get("deduction", 0),
+                    stage_scope=a_data.get("stage_scope", ""),
+                    stage_unclear=a_data.get("stage_unclear", False),
                 ))
 
             dimension_results.append(DimensionResult(
@@ -787,6 +805,7 @@ def build_report_html(
         detection_result = DetectionResult(
             case_name=case_name,
             doc_type=doc_type,
+            trial_stage=trial_stage,
             model_name=model_name,
             detection_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             dimension_results=dimension_results,
@@ -959,6 +978,22 @@ def _section_outline(content: str) -> str:
 
 
 # ── Helper Functions ───────────────────────────────────────────
+
+
+def _infer_trial_stage(case_name: str) -> str:
+    if not case_name:
+        return "未知"
+    if re.search(r"民终|行终|刑终|终字|终\d+号", case_name):
+        return "二审"
+    if re.search(r"民再|行再|刑再|再字|再\d+号", case_name):
+        return "再审"
+    if re.search(r"民初|行初|刑初|初字|初\d+号", case_name):
+        return "一审"
+    if re.search(r"劳仲|仲字|仲\d+号", case_name):
+        return "仲裁"
+    if re.search(r"行罚|行决|罚字", case_name):
+        return "行政"
+    return "未知"
 
 
 def _build_system_prompt(meta) -> str:

@@ -877,3 +877,202 @@ class TestBuildReportHtmlTool:
         assert "<h2>" in html
         assert "<h3>" in html
         assert "<h4>" in html
+
+
+# ── Trial Stage Inference ──────────────────────────────────
+
+
+class TestTrialStageInference:
+    def test_infer_second_instance(self):
+        from judicial_lint_mcp.server import _infer_trial_stage
+
+        assert _infer_trial_stage("（2024）苏06民终6271号") == "二审"
+        assert _infer_trial_stage("（2023）京01民终1234号") == "二审"
+        assert _infer_trial_stage("某省某市中级人民法院 民终567号") == "二审"
+
+    def test_infer_first_instance(self):
+        from judicial_lint_mcp.server import _infer_trial_stage
+
+        assert _infer_trial_stage("（2024）苏06民初1234号") == "一审"
+        assert _infer_trial_stage("（2023）京01民初5678号") == "一审"
+
+    def test_infer_retrial(self):
+        from judicial_lint_mcp.server import _infer_trial_stage
+
+        assert _infer_trial_stage("（2024）苏06民再12号") == "再审"
+        assert _infer_trial_stage("（2023）京01民再3号") == "再审"
+
+    def test_infer_arbitration(self):
+        from judicial_lint_mcp.server import _infer_trial_stage
+
+        assert _infer_trial_stage("某劳仲123号") == "仲裁"
+        assert _infer_trial_stage("某市劳动争议仲裁委员会 仲字45号") == "仲裁"
+
+    def test_infer_administrative(self):
+        from judicial_lint_mcp.server import _infer_trial_stage
+
+        assert _infer_trial_stage("某市监局 行罚决字123号") == "行政"
+
+    def test_infer_unknown(self):
+        from judicial_lint_mcp.server import _infer_trial_stage
+
+        assert _infer_trial_stage("") == "未知"
+        assert _infer_trial_stage("某案件") == "未知"
+        assert _infer_trial_stage(None) == "未知"
+
+
+class TestTrialStageInModels:
+    def test_detection_result_has_trial_stage(self):
+        from judicial_lint_mcp.models import DetectionResult
+
+        r = DetectionResult(case_name="测试", trial_stage="二审")
+        assert r.trial_stage == "二审"
+
+    def test_detection_result_default_trial_stage(self):
+        from judicial_lint_mcp.models import DetectionResult
+
+        r = DetectionResult(case_name="测试")
+        assert r.trial_stage == ""
+
+    def test_anomaly_item_has_stage_scope(self):
+        from judicial_lint_mcp.models import AnomalyItem
+
+        a = AnomalyItem(dimension="procedure", stage_scope="二审", stage_unclear=False)
+        assert a.stage_scope == "二审"
+        assert a.stage_unclear is False
+
+    def test_anomaly_item_stage_unclear(self):
+        from judicial_lint_mcp.models import AnomalyItem
+
+        a = AnomalyItem(dimension="evidence", stage_scope="一审（需补充材料确认）", stage_unclear=True)
+        assert a.stage_unclear is True
+        assert "需补充材料" in a.stage_scope
+
+
+class TestTrialStageInBuildReport:
+    def test_build_report_with_trial_stage(self):
+        from judicial_lint_mcp.server import build_report
+
+        dim_data = [{
+            "dimension": "procedure",
+            "anomalies": [{
+                "item_name": "二审审查疏漏",
+                "description": "二审未审查一审程序违法问题",
+                "beneficiary": "被上诉人",
+                "confidence": "high",
+                "f_code": "F-01",
+                "a_code": "A6",
+                "original_text": "原文引用",
+                "stage_scope": "一审（二审未审查）",
+                "stage_unclear": False,
+            }],
+            "risk_level": "high",
+            "summary": "二审审查存在疏漏",
+        }]
+        report = build_report(
+            "（2024）苏06民终6271号",
+            json.dumps(dim_data),
+            "判决书",
+            "AI Agent",
+            trial_stage="二审",
+        )
+        assert "二审" in report
+        assert "审级" in report
+        assert "一审（二审未审查）" in report
+
+    def test_build_report_auto_infer_trial_stage(self):
+        from judicial_lint_mcp.server import build_report
+
+        dim_data = [{
+            "dimension": "procedure",
+            "anomalies": [],
+            "risk_level": "low",
+            "summary": "无异常",
+        }]
+        report = build_report(
+            "（2024）苏06民终6271号",
+            json.dumps(dim_data),
+            "判决书",
+            "AI Agent",
+        )
+        assert "二审" in report
+        assert "审级" in report
+
+    def test_build_report_stage_unclear_flag(self):
+        from judicial_lint_mcp.server import build_report
+
+        dim_data = [{
+            "dimension": "evidence",
+            "anomalies": [{
+                "item_name": "证据采信问题",
+                "description": "无法确定是一审还是二审的证据问题",
+                "beneficiary": "被上诉人",
+                "confidence": "medium",
+                "stage_scope": "无法区分审级，需补充一审庭审笔录确认",
+                "stage_unclear": True,
+            }],
+            "risk_level": "medium",
+            "summary": "存在审级不明问题",
+        }]
+        report = build_report(
+            "（2024）苏06民终6271号",
+            json.dumps(dim_data),
+            "判决书",
+            "AI Agent",
+            trial_stage="二审",
+        )
+        assert "审级不明" in report or "stage_unclear" in report.lower() or "无法区分" in report
+
+    def test_build_report_html_with_trial_stage(self):
+        from judicial_lint_mcp.server import build_report_html
+
+        dim_data = [{
+            "dimension": "procedure",
+            "anomalies": [{
+                "item_name": "二审程序违法",
+                "description": "二审未开庭审理",
+                "beneficiary": "被上诉人",
+                "confidence": "high",
+                "stage_scope": "二审",
+                "stage_unclear": False,
+            }],
+            "risk_level": "high",
+            "summary": "二审程序存在违法",
+        }]
+        html = build_report_html(
+            "（2024）苏06民终6271号",
+            json.dumps(dim_data),
+            "判决书",
+            "AI Agent",
+            trial_stage="二审",
+        )
+        assert "<!DOCTYPE html>" in html
+        assert "二审" in html
+        assert "审级" in html
+
+
+class TestTrialStageNoCrossAttribution:
+    def test_first_instance_issue_not_counted_as_second_instance_anomaly(self):
+        from judicial_lint_mcp.server import build_report
+
+        dim_data = [{
+            "dimension": "procedure",
+            "anomalies": [{
+                "item_name": "一审程序违法（二审已纠正）",
+                "description": "一审未送达答辩状，二审已发回重审",
+                "beneficiary": "上诉人",
+                "confidence": "high",
+                "stage_scope": "一审（二审已纠正）",
+                "stage_unclear": False,
+            }],
+            "risk_level": "low",
+            "summary": "一审问题已被二审纠正，不构成二审异常",
+        }]
+        report = build_report(
+            "（2024）苏06民终6271号",
+            json.dumps(dim_data),
+            "判决书",
+            "AI Agent",
+            trial_stage="二审",
+        )
+        assert "一审（二审已纠正）" in report

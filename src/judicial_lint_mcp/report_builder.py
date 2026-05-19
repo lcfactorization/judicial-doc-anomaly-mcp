@@ -99,6 +99,7 @@ class ReportBuilder:
             f"| 报告编号 | {report_id} |",
             f"| 案件名称 | {result.case_name} |",
             f"| 文书类型 | {result.doc_type} |",
+            f"| 审级 | {result.trial_stage or '未知'} |",
             f"| 检测模型 | {result.model_name} |",
             f"| 检测时间 | {result.detection_time} |",
             f"| 风险等级 | {risk_cn} |",
@@ -232,6 +233,12 @@ class ReportBuilder:
 
                 if a.beneficiary:
                     parts.append(f"- **指向获益方**：{a.beneficiary}")
+
+                if hasattr(a, 'stage_scope') and a.stage_scope:
+                    scope_label = a.stage_scope
+                    if hasattr(a, 'stage_unclear') and a.stage_unclear:
+                        scope_label += " ⚠️审级不明"
+                    parts.append(f"- **审级归属**：{scope_label}")
 
                 if a.f_code or a.a_code:
                     code_parts = []
