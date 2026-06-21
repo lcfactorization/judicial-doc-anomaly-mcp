@@ -162,15 +162,15 @@ class ReportBuilder:
             alerts.append("> [!DANGER]")
             alerts.append(f"> 检出 {high_count} 项高置信度异常，风险等级极高，强烈建议启动程序内救济。")
         elif risk_level == "high":
-            alerts.append("> [!WARNING]")
+            alerts.append("> [!Warning]")
             alerts.append(f"> 检出 {high_count} 项高置信度异常，存在系统性偏差风险，建议优先审查。")
 
         if total > 5:
-            alerts.append("> [!IMPORTANT]")
+            alerts.append("> [!Important]")
             alerts.append(f"> 异常项总数达 {total} 项，建议启动多维度联合审查。")
 
         if total == 0:
-            alerts.append("> [!NOTE]")
+            alerts.append("> [!Note]")
             alerts.append("> 未检出显著异常，文书整体质量尚可。")
 
         return "\n".join(alerts) if alerts else ""
@@ -186,7 +186,7 @@ class ReportBuilder:
             parts.append(f"**风险等级**：{risk_cn}  |  **异常项数**：{len(r.anomalies)}\n")
 
             if not r.anomalies:
-                parts.append("> [!NOTE]")
+                parts.append("> [!Note]")
                 parts.append("> 本维度未发现显著异常。")
                 continue
 
@@ -206,7 +206,7 @@ class ReportBuilder:
                 summary = re.sub(r"^(审查报告|检测报告|总结|综合结论)[：:]*\s*", "", summary)
                 summary = summary.replace("\n", " ")
                 if summary:
-                    parts.append("> [!WARNING]")
+                    parts.append("> [!Warning]")
                     parts.append(f"> 本维度存在 {len(r.anomalies)} 项异常，风险等级{risk_cn}。{summary}")
                     parts.append("")
 
@@ -256,7 +256,7 @@ class ReportBuilder:
 
                 if a.q1_alternative or a.q2_subjective_intent or a.q3_contradictory_evidence:
                     parts.append("")
-                    parts.append("> [!IMPORTANT]")
+                    parts.append("> [!Important]")
                     parts.append("> **对抗校验**：")
                     if a.q1_alternative:
                         parts.append(f"> - Q1（替代解释）：{a.q1_alternative}")
@@ -271,7 +271,7 @@ class ReportBuilder:
 
                 if a.suggestion:
                     parts.append("")
-                    parts.append("> [!TIP]")
+                    parts.append("> [!Tip]")
                     sug = a.suggestion.replace("\n", "\n> ")
                     parts.append(f"> **修复建议**：{sug}")
 
@@ -292,7 +292,7 @@ class ReportBuilder:
         ]
 
         if high_dims:
-            parts.append("> [!IMPORTANT]")
+            parts.append("> [!Important]")
             parts.append(f"> 高风险维度：{', '.join(high_dims)}")
             parts.append("")
 
@@ -315,10 +315,10 @@ class ReportBuilder:
             parts.append("> [!DANGER]")
             parts.append("> 综合评估：文书存在显著异常，建议启动程序内救济（上诉/再审/检察监督）。")
         elif risk_level == "medium":
-            parts.append("> [!WARNING]")
+            parts.append("> [!Warning]")
             parts.append("> 综合评估：文书存在一定异常，建议进一步审查关键维度。")
         else:
-            parts.append("> [!NOTE]")
+            parts.append("> [!Note]")
             parts.append("> 综合评估：文书整体质量尚可，未发现显著异常。")
 
         return "\n".join(parts)
