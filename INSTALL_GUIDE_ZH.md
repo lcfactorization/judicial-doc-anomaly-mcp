@@ -183,11 +183,11 @@ MCP Server 只负责渲染 Prompt，不调 LLM。如果结果为空，可能是�
 用双反斜杠或正斜杠：
 ```
 # ✅ 正确
-"C:\\Users\\stere\\Projects\\judicial-doc-anomaly-mcp"
-"C:/Users/stere/Projects/judicial-doc-anomaly-mcp"
+"C:\\Users\\<你的用户名>\\Projects\\judicial-doc-anomaly-mcp"
+"C:/Users/<你的用户名>/Projects/judicial-doc-anomaly-mcp"
 
 # ❌ 错误
-"C:\Users\stere\Projects\judicial-doc-anomaly-mcp"
+"C:\Users\<你的用户名>\Projects\judicial-doc-anomaly-mcp"
 ```
 
 ---

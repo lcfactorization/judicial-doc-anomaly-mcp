@@ -1,6 +1,7 @@
 """Quick test: run only evidence dimension to verify beneficiary fix."""
 
 import asyncio
+import os
 import logging
 import sys
 from pathlib import Path
@@ -23,7 +24,10 @@ logger = logging.getLogger("quick-test")
 
 
 async def main():
-    case_dir = r"C:\Users\stere\Documents\Obsidian Vault\judicial-doc-anomaly-mcp\tests\fixtures\sample_case"
+    case_dir = os.environ.get(
+        "CASE_DIR",
+        str(Path(__file__).parent / "tests" / "fixtures" / "sample_case"),
+    )
 
     config = AppConfig.from_env()
     config.detection.dimensions = ["evidence"]
