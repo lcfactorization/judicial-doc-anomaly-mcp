@@ -18,6 +18,12 @@
 - 新增 **A9 诉请回应缺失**（slug：`claim_response_missing`）：`taxonomy.py` 与 `skills/_taxonomy.md` 同步更新。
 - 维度三（事实认定）检测项由 26 项扩展至 28 项：新增 **F-27 遗漏诉讼请求**、**F-28 结论式驳斥**，并映射到 A9。
 
+### 红旗预警升级机制（Red-Flag Escalation）
+- `taxonomy.py`：`AnomalyCategory`（A 码）新增 `fatal: bool = False` 属性，新增 F 码元数据注册表 `F_CODES` 与 `is_fatal()` 判定函数；fatal 标记采用保守原则——**A9 诉请回应缺失、F-27 遗漏诉讼请求标 fatal=True**，F-28 结论式驳斥 fatal=False（severity_base 提至 0.75）；A1-A8 经逐一审查，其标签均非"剥夺当事人诉讼权利/程序违法且可致发回重审"性质（含最接近的 A5 程序时间线异常，因时间线偏差多为技术性而非当然剥夺权利），按"拿不准就不标"未标记。
+- `report_builder.py`：检出 fatal 异常时在报告**最顶部**渲染"🚩 红旗预警"区块（逐条列出编码/维度/异常项/获益方/置信度/原文摘录 + 后果评估），遗漏诉请类后果标注"存在二审撤销原判发回重审的强信号（《民事诉讼法》第一百七十七条第一款第四项及遗漏诉讼请求的司法解释口径）"，其它 fatal 项标注再审监督/程序纠正风险；区块以"红旗终评：本报告异常等级按最高 fatal 项呈现"收尾；红旗信号独立于综合评分。
+- `server.py`：`build_report` 工具新增 `red_flag_escalation: bool = True` 开关，透传 report_builder；False 时保持旧行为（无红旗区块）。
+- D17 维度新增"行政文书模式"小节：评估行政处理/处罚决定书时，诉请台账对应申请人复议/诉讼请求，逐项回应与裁量四要素判定规则同用；后果切换为行政复议撤销/变更（《行政复议法》（2023修订）第六十三条、第六十四条）或行政诉讼撤销/变更（《行政诉讼法》第七十条、第七十七条，六项撤销情形）。
+
 ### 文档与版本对齐
 - README 工具数量校正为实际的 14 个并逐项列表；`render_pipeline` 标注为已弃用（改用 `plan_pipeline` + `render_skill`）。
 - README 工具参数按实际代码修正：`parse_response`（`dimension`/`response`/`dimension_index`）、`compact_materials`（`materials`/`max_tokens`/`strategy`/`anonymize`）、`build_report`（`case_name`/`dimension_results_json`）、`pipeline_progress`（`session_id`/`action`/`skill_name`/`result_summary`）。
@@ -26,3 +32,4 @@
 
 ### 测试
 - 新增 `tests/test_v060.py`：D17 维度发现与渲染、full_scan 流水线包含 D17、A9 分类一致性、write_skill 路径穿越拒绝（`../evil.md`、绝对路径、嵌套穿越）及正常写入回归。
+- 新增 `tests/test_redflag.py`：A9/F-27 fatal 标记断言（A1-A8 保守不标记）、红旗区块渲染于报告顶部并含后果文案、`red_flag_escalation=False` 关闭开关、D17 行政文书模式小节。

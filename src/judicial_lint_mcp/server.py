@@ -660,6 +660,7 @@ def build_report(
     doc_type: str = "判决书",
     model_name: str = "AI Agent",
     trial_stage: str = "",
+    red_flag_escalation: bool = True,
 ) -> str:
     """从结构化异常数据生成格式化的 Markdown 检测报告。
     AI Agent 收集完所有维度的解析结果后，调用此工具生成最终报告。
@@ -670,6 +671,9 @@ def build_report(
     doc_type: 文书类型（默认 '判决书'）
     model_name: 使用的模型名称（默认 'AI Agent'）
     trial_stage: 审级（'一审'/'二审'/'再审'/'仲裁'/'行政'/'未知'，为空时自动从案号推断）
+    red_flag_escalation: 红旗预警升级开关（默认 True）。检出 fatal 级异常
+        （A9 诉请回应缺失、F-27 遗漏诉讼请求）时，在报告最顶部渲染"🚩 红旗预警"区块；
+        置为 False 时保持旧行为（无红旗区块）。
 
     返回格式化的 Markdown 报告文本。
     """
@@ -732,7 +736,7 @@ def build_report(
             dimension_results=dimension_results,
         )
 
-        report = _builder.build_report(detection_result)
+        report = _builder.build_report(detection_result, red_flag_escalation=red_flag_escalation)
         logger.info("build_report: 报告生成完成, 长度=%d", len(report))
         return report
 

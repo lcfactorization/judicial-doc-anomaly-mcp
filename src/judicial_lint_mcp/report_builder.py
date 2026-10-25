@@ -9,6 +9,7 @@ import re
 from datetime import datetime
 
 from .models import DetectionResult, DimensionResult
+from .taxonomy import is_fatal
 
 logger = logging.getLogger(__name__)
 
@@ -38,14 +39,37 @@ _DIM_LABELS = {
     "semantic_drift": "维度十四：语义漂移检测",
     "case_deviation": "维度十五：类案偏离量化",
     "coupling": "维度十六：惯性耦合判定",
+    "claim_support": "维度十七：诉请支持度与回应完整性",
 }
+
+# 红旗预警后果文案（v0.6.0 red-flag escalation layer）
+_OMISSION_CONSEQUENCE = (
+    "存在二审撤销原判发回重审的强信号"
+    "（《民事诉讼法》第一百七十七条第一款第四项及遗漏诉讼请求的司法解释口径），"
+    "任何综合评分不得掩盖上述信号"
+)
+_GENERIC_FATAL_CONSEQUENCE = (
+    "存在启动再审监督/程序纠正的强信号，任何综合评分不得掩盖上述信号"
+)
+
+_RED_FLAG_HEADING = "# 🚩 红旗预警（Red-Flag Escalation）"
+
+
+def _fatal_consequence(f_code: str, a_code: str) -> str:
+    """按异常性质选择红旗后果文案：遗漏诉请类用二审发回重审口径，其余用再审监督/程序纠正口径。"""
+    if f_code == "F-27" or a_code == "A9":
+        return _OMISSION_CONSEQUENCE
+    return _GENERIC_FATAL_CONSEQUENCE
 
 
 class ReportBuilder:
     """Build structured Markdown reports from DetectionResult."""
 
-    def build_report(self, result: DetectionResult) -> str:
-        logger.info("build_report: 开始生成报告, 维度数=%d", len(result.dimension_results))
+    def build_report(self, result: DetectionResult, red_flag_escalation: bool = True) -> str:
+        logger.info(
+            "build_report: 开始生成报告, 维度数=%d, red_flag_escalation=%s",
+            len(result.dimension_results), red_flag_escalation,
+        )
 
         total_anomalies = sum(len(r.anomalies) for r in result.dimension_results)
         high_count = sum(
@@ -74,6 +98,11 @@ class ReportBuilder:
 
         parts = []
 
+        if red_flag_escalation:
+            red_flag_banner = self._build_red_flag_banner(result.dimension_results)
+            if red_flag_banner:
+                parts.append(red_flag_banner)
+
         parts.append(self._build_header(result, report_id, risk_cn, total_anomalies, high_count, medium_count, low_count))
 
         parts.append(self._build_overview_table(result.dimension_results))
@@ -90,6 +119,48 @@ class ReportBuilder:
         logger.info("build_report: 报告生成完成, 总长度=%d", len(report))
         return report
 
+    def _build_red_flag_banner(self, dimension_results: list[DimensionResult]) -> str | None:
+        """汇总 fatal=True 的异常项，渲染报告最顶部的红旗预警区块；无 fatal 项时返回 None。"""
+        fatal_items: list[tuple[str, object]] = []
+        for r in dimension_results:
+            for a in r.anomalies:
+                if is_fatal(a.f_code, a.a_code):
+                    fatal_items.append((r.dimension, a))
+
+        if not fatal_items:
+            return None
+
+        lines = [_RED_FLAG_HEADING, ""]
+        lines.append("> [!DANGER]")
+        lines.append(
+            f"> 检出 {len(fatal_items)} 项 fatal 级异常，已触发红旗预警升级；"
+            "以下信号独立于综合评分成立，不受风险等级与评分高低影响。"
+        )
+        lines.append("")
+        lines.append("| # | 编码 | 维度 | 异常项 | 获益方 | 置信度 | 原文摘录 |")
+        lines.append("|:---:|------|------|------|:---:|:---:|------|")
+
+        for i, (dim, a) in enumerate(fatal_items, 1):
+            codes = "/".join(c for c in [a.f_code, a.a_code] if c) or "—"
+            excerpt = (a.original_text or a.description or "").replace("\n", " ").replace("|", "／")
+            excerpt = excerpt[:80] + ("…" if len(excerpt) > 80 else "")
+            conf_cn = _CONFIDENCE_CN.get(a.confidence, a.confidence)
+            lines.append(
+                f"| {i} | {codes} | {_DIM_LABELS.get(dim, dim)} | {a.item_name[:50]} | "
+                f"{a.beneficiary or '—'} | {conf_cn} | {excerpt} |"
+            )
+
+        lines.append("")
+        lines.append("**后果评估**：")
+        for i, (_, a) in enumerate(fatal_items, 1):
+            label = a.item_name[:40] or a.f_code or a.a_code or f"红旗项{i}"
+            consequence = _fatal_consequence(a.f_code, a.a_code)
+            lines.append(f"- [{a.f_code or a.a_code or '—'}] {label}：{consequence}")
+
+        lines.append("")
+        lines.append("红旗终评：本报告异常等级按最高 fatal 项呈现。")
+        return "\n".join(lines)
+
     def _build_header(self, result, report_id, risk_cn, total, high, medium, low) -> str:
         lines = [
             f"# 司法文书异常检测报告",
@@ -105,7 +176,7 @@ class ReportBuilder:
             f"| 风险等级 | {risk_cn} |",
             f"| 异常总数 | {total}（高度 {high} / 中度 {medium} / 低度 {low}）|",
             f"| 检测维度 | {len(result.dimension_results)} |",
-            f"| 版本 | v0.5.1 Bridge Architecture |",
+            f"| 版本 | v0.6.0 Bridge Architecture |",
         ]
         return "\n".join(lines)
 
@@ -138,7 +209,7 @@ class ReportBuilder:
         seq = 0
         for r in dimension_results:
             dim_cn = _DIM_LABELS.get(r.dimension, r.dimension)
-            dim_short = dim_cn.replace("维度一：", "D1·").replace("维度二：", "D2·").replace("维度三：", "D3·").replace("维度四：", "D4·").replace("维度五：", "D5·").replace("维度六：", "D6·").replace("维度七：", "D7·").replace("维度八：", "D8·").replace("维度九：", "D9·").replace("维度十：", "D10·").replace("维度十一：", "D11·").replace("维度十二：", "D12·").replace("维度十三：", "D13·").replace("维度十四：", "D14·").replace("维度十五：", "D15·").replace("维度十六：", "D16·")
+            dim_short = dim_cn.replace("维度一：", "D1·").replace("维度二：", "D2·").replace("维度三：", "D3·").replace("维度四：", "D4·").replace("维度五：", "D5·").replace("维度六：", "D6·").replace("维度七：", "D7·").replace("维度八：", "D8·").replace("维度九：", "D9·").replace("维度十：", "D10·").replace("维度十一：", "D11·").replace("维度十二：", "D12·").replace("维度十三：", "D13·").replace("维度十四：", "D14·").replace("维度十五：", "D15·").replace("维度十六：", "D16·").replace("维度十七：", "D17·")
             for a in r.anomalies:
                 seq += 1
                 desc = a.description.replace("\n", " ").replace("|", "／")[:200]
@@ -660,7 +731,7 @@ tr:hover td {{ background: rgba(88,166,255,0.08); }}
 <div class="report-container">
 {body_html}
 <div class="footer">
-<p>司法文书异常检测报告 · v0.5.1 Bridge Architecture · {report_id}</p>
+<p>司法文书异常检测报告 · v0.6.0 Bridge Architecture · {report_id}</p>
 <p>本报告由 AI 辅助生成，仅供参考，不构成法律意见。</p>
 </div>
 </div>
