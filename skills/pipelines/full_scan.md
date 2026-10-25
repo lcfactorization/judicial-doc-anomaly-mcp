@@ -1,11 +1,11 @@
 ---
 name: full_scan
-title: 全量16维扫描流水线
+title: 全量17维扫描流水线
 type: pipeline
-version: "0.5.0"
+version: "0.6.0"
 ---
 
-# 全量16维扫描流水线
+# 全量17维扫描流水线
 
 ## 流水线定义
 
@@ -19,7 +19,7 @@ version: "0.5.0"
 - input: preprocessed_data
 - output: graph_result
 
-### Phase 2: 16维度逐项检测
+### Phase 2: 17维度逐项检测
 - skill: dimensions/01_procedure
 - skill: dimensions/02_evidence
 - skill: dimensions/03_fact_finding
@@ -35,6 +35,7 @@ version: "0.5.0"
 - skill: dimensions/13_negative_space
 - skill: dimensions/14_semantic_drift
 - skill: dimensions/15_case_deviation
+- skill: dimensions/17_claim_support
 - input: materials + context from previous dimensions
 - output: dimension_results
 

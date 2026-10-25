@@ -1,4 +1,4 @@
-"""CLI v0.5.1 — Simple Agent that uses MCP Server bridge tools.
+"""CLI v0.6.0 — Simple Agent that uses MCP Server bridge tools.
 
 This CLI demonstrates how an AI Agent would use the MCP Server:
   1. render_skill / render_pipeline → get prompts
@@ -54,10 +54,10 @@ def _call_tool(tool_name: str, arguments: dict) -> str:
 
 
 @click.group()
-@click.version_option(version="0.5.0")
+@click.version_option(version="0.6.0")
 @click.pass_context
 def cli(ctx):
-    """司法文书异常检测工具 v0.5.1 (Bridge Architecture)"""
+    """司法文书异常检测工具 v0.6.0 (Bridge Architecture)"""
     ctx.ensure_object(dict)
 
 
@@ -160,7 +160,7 @@ def list_skills_cmd(category):
 @cli.command()
 @click.argument("dimension")
 @click.argument("response_file", type=click.Path(exists=True))
-@click.option("--index", "-i", default=0, help="维度索引（0-15）")
+@click.option("--index", "-i", default=0, help="维度索引（0-16）")
 @click.option("--output", "-o", type=click.Path(), help="输出文件路径")
 def parse(dimension, response_file, index, output):
     """解析 LLM 响应为结构化异常数据"""
@@ -212,7 +212,7 @@ def report(case_name, results_file, doc_type, model, output):
         console.print(f"[green]报告已保存至：{output}[/green]")
     else:
         date_str = datetime.now().strftime("%Y%m%d")
-        default_name = f"司法文书异常检测报告_AI-Agent_v0.5.1_{date_str}.md"
+        default_name = f"司法文书异常检测报告_AI-Agent_v0.6.0_{date_str}.md"
         default_path = Path(".") / default_name
         default_path.write_text(result, encoding="utf-8")
         console.print(f"[green]报告已保存至：{default_path}[/green]")

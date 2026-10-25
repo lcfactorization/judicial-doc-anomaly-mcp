@@ -1,6 +1,6 @@
-"""Anomaly taxonomy — A1-A8 unified numbering system.
+"""Anomaly taxonomy — A1-A9 unified numbering system.
 
-Bridges the 16-dimension detection grid (F-01 to F-26) with a
+Bridges the 17-dimension detection grid (F-01 to F-28) with a
 higher-level taxonomy that enables:
   - Cross-case comparability
   - Statistical aggregation
@@ -93,6 +93,15 @@ TAXONOMY: list[AnomalyCategory] = [
         description="将本应由一方承担的举证责任不当转移给另一方，或对举证责任分配未予说明",
         dimensions=[2, 3, 6],
         f_codes=["F-26"],
+        severity_base=0.90,
+        bidirectional=True,
+    ),
+    AnomalyCategory(
+        code="A9",
+        label="诉请回应缺失",
+        description="（claim_response_missing）对当事人明确提出或变更的诉讼请求/抗辩主张，裁判文书未逐项回应、审理或说理，包括遗漏诉请、无理由不予理涉、变更诉请未处理及结论式驳斥",
+        dimensions=[3, 17],
+        f_codes=["F-27", "F-28"],
         severity_base=0.90,
         bidirectional=True,
     ),
