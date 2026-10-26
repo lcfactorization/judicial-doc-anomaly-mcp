@@ -886,7 +886,7 @@ class TestTrialStageInference:
     def test_infer_second_instance(self):
         from judicial_lint_mcp.server import _infer_trial_stage
 
-        assert _infer_trial_stage("（2024）苏06民终6271号") == "二审"
+        assert _infer_trial_stage("（2024）苏06民终9101号") == "二审"
         assert _infer_trial_stage("（2023）京01民终1234号") == "二审"
         assert _infer_trial_stage("某省某市中级人民法院 民终567号") == "二审"
 
@@ -970,7 +970,7 @@ class TestTrialStageInBuildReport:
             "summary": "二审审查存在疏漏",
         }]
         report = build_report(
-            "（2024）苏06民终6271号",
+            "（2024）苏06民终9101号",
             json.dumps(dim_data),
             "判决书",
             "AI Agent",
@@ -990,7 +990,7 @@ class TestTrialStageInBuildReport:
             "summary": "无异常",
         }]
         report = build_report(
-            "（2024）苏06民终6271号",
+            "（2024）苏06民终9101号",
             json.dumps(dim_data),
             "判决书",
             "AI Agent",
@@ -1015,7 +1015,7 @@ class TestTrialStageInBuildReport:
             "summary": "存在审级不明问题",
         }]
         report = build_report(
-            "（2024）苏06民终6271号",
+            "（2024）苏06民终9101号",
             json.dumps(dim_data),
             "判决书",
             "AI Agent",
@@ -1040,7 +1040,7 @@ class TestTrialStageInBuildReport:
             "summary": "二审程序存在违法",
         }]
         html = build_report_html(
-            "（2024）苏06民终6271号",
+            "（2024）苏06民终9101号",
             json.dumps(dim_data),
             "判决书",
             "AI Agent",
@@ -1069,7 +1069,7 @@ class TestTrialStageNoCrossAttribution:
             "summary": "一审问题已被二审纠正，不构成二审异常",
         }]
         report = build_report(
-            "（2024）苏06民终6271号",
+            "（2024）苏06民终9101号",
             json.dumps(dim_data),
             "判决书",
             "AI Agent",

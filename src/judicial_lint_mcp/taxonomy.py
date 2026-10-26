@@ -1,10 +1,14 @@
-"""Anomaly taxonomy — A1-A8 unified numbering system.
+"""Anomaly taxonomy — A1-A9 unified numbering system.
 
-Bridges the 16-dimension detection grid (F-01 to F-26) with a
+Bridges the 17-dimension detection grid (F-01 to F-28) with a
 higher-level taxonomy that enables:
   - Cross-case comparability
   - Statistical aggregation
   - Benchmark calibration
+  - Red-flag escalation (fatal marks on A-codes / F-codes, v0.6.0)
+
+fatal 标记原则（保守）：仅对"剥夺当事人诉讼权利/重大程序违法且可直接导致
+发回重审或再审监督"性质的码标注 fatal=True；拿不准的不标。
 """
 
 from __future__ import annotations
@@ -21,6 +25,29 @@ class AnomalyCategory:
     f_codes: list[str]
     severity_base: float
     bidirectional: bool
+    # 红旗预警升级标记：fatal=True 的分类一经命中，独立于综合评分在报告顶部呈现
+    # （v0.6.0 red-flag escalation layer）
+    fatal: bool = False
+
+
+@dataclass(frozen=True)
+class FCodeMeta:
+    """F 码结构化元数据（红旗预警升级用）。
+
+    F-01 至 F-26 的完整检测项定义见 skills/dimensions/03_fact_finding.md，
+    此处仅登记需要参与 fatal 判定/严重度核算的码；未登记的 F 码按非 fatal 处理。
+    """
+
+    code: str
+    label: str
+    fatal: bool = False
+    severity_base: float = 0.60
+
+
+F_CODES: dict[str, FCodeMeta] = {
+    "F-27": FCodeMeta(code="F-27", label="遗漏诉讼请求", fatal=True, severity_base=0.90),
+    "F-28": FCodeMeta(code="F-28", label="结论式驳斥", fatal=False, severity_base=0.75),
+}
 
 
 TAXONOMY: list[AnomalyCategory] = [
@@ -96,6 +123,16 @@ TAXONOMY: list[AnomalyCategory] = [
         severity_base=0.90,
         bidirectional=True,
     ),
+    AnomalyCategory(
+        code="A9",
+        label="诉请回应缺失",
+        description="（claim_response_missing）对当事人明确提出或变更的诉讼请求/抗辩主张，裁判文书未逐项回应、审理或说理，包括遗漏诉请、无理由不予理涉、变更诉请未处理及结论式驳斥",
+        dimensions=[3, 17],
+        f_codes=["F-27", "F-28"],
+        severity_base=0.90,
+        bidirectional=True,
+        fatal=True,
+    ),
 ]
 
 
@@ -104,6 +141,23 @@ _CODE_MAP: dict[str, AnomalyCategory] = {c.code: c for c in TAXONOMY}
 
 def get_category(code: str) -> AnomalyCategory | None:
     return _CODE_MAP.get(code)
+
+
+def get_f_code(code: str) -> FCodeMeta | None:
+    return F_CODES.get(code)
+
+
+def is_fatal(f_code: str = "", a_code: str = "") -> bool:
+    """判定一个异常项是否为 fatal 级（命中 A 码或 F 码任一 fatal 标记即成立）。"""
+    if a_code:
+        cat = _CODE_MAP.get(a_code)
+        if cat is not None and cat.fatal:
+            return True
+    if f_code:
+        meta = F_CODES.get(f_code)
+        if meta is not None and meta.fatal:
+            return True
+    return False
 
 
 def category_from_f_code(f_code: str) -> list[AnomalyCategory]:

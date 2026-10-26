@@ -1,4 +1,4 @@
-"""MCP Server v0.5.1 — Bridge Architecture with Long-Context Support.
+"""MCP Server v0.6.0 — Bridge Architecture with Long-Context Support.
 
 MCP Server is a BRIDGE between AI Agents and Skills.
 It does NOT call any LLM. It only:
@@ -7,6 +7,11 @@ It does NOT call any LLM. It only:
   3. Builds formatted reports from structured data
   4. Manages Skill discovery, pipeline definitions, and Skill file updates
   5. Provides token estimation, material compaction, and pipeline state management
+
+v0.6.0 changes:
+  - write_skill: path traversal hardening (reject '..' / absolute / outside SKILLS_DIR)
+  - New dimension skill: dimensions/17_claim_support (claim-support & response completeness)
+  - Taxonomy extended to A9 (claim_response_missing)
 
 v0.5.1 changes:
   - PipelineStateManager: thread-safe, TTL-expiring, file-persisted state (fixes memory leak & crash recovery)
@@ -20,6 +25,7 @@ v0.5.1 changes:
 
 import json
 import logging
+import os
 import re
 import threading
 from datetime import datetime
@@ -593,7 +599,7 @@ def parse_response(
 
     dimension: 维度标识（如 'procedure', 'evidence', 'fact_finding'）
     response: LLM 返回的原始响应文本
-    dimension_index: 维度索引（0-15），用于分类体系映射
+    dimension_index: 维度索引（0-16），用于分类体系映射
 
     返回 JSON 字符串，包含：
     - dimension: 维度标识
@@ -654,6 +660,7 @@ def build_report(
     doc_type: str = "判决书",
     model_name: str = "AI Agent",
     trial_stage: str = "",
+    red_flag_escalation: bool = True,
 ) -> str:
     """从结构化异常数据生成格式化的 Markdown 检测报告。
     AI Agent 收集完所有维度的解析结果后，调用此工具生成最终报告。
@@ -664,6 +671,9 @@ def build_report(
     doc_type: 文书类型（默认 '判决书'）
     model_name: 使用的模型名称（默认 'AI Agent'）
     trial_stage: 审级（'一审'/'二审'/'再审'/'仲裁'/'行政'/'未知'，为空时自动从案号推断）
+    red_flag_escalation: 红旗预警升级开关（默认 True）。检出 fatal 级异常
+        （A9 诉请回应缺失、F-27 遗漏诉讼请求）时，在报告最顶部渲染"🚩 红旗预警"区块；
+        置为 False 时保持旧行为（无红旗区块）。
 
     返回格式化的 Markdown 报告文本。
     """
@@ -726,7 +736,7 @@ def build_report(
             dimension_results=dimension_results,
         )
 
-        report = _builder.build_report(detection_result)
+        report = _builder.build_report(detection_result, red_flag_escalation=red_flag_escalation)
         logger.info("build_report: 报告生成完成, 长度=%d", len(report))
         return report
 
@@ -862,17 +872,49 @@ def write_skill(
     """写入或更新一个 SKILL.md 文件。供 AI Agent 迭代优化提示词使用。
 
     skill_name: Skill 名称（如 'dimensions/02_evidence'、'_system'）
+        仅允许相对于 Skills 目录的名称。
+        禁止包含 '..'、绝对路径（盘符/根路径）或任何解析后越出 Skills 目录的目标。
     content: 完整的 SKILL.md 内容（包含 frontmatter 和正文）
 
-    返回操作结果。
+    返回操作结果。路径校验失败时返回不可重试错误（错误码 PATH_400）。
     """
     try:
-        parts = skill_name.split("/")
-        target = _loader.skills_dir / Path(*parts)
+        raw = (skill_name or "").strip()
+        if not raw:
+            return make_error(
+                ErrorCode.INVALID_PARAMS, "skill_name 不能为空", {"skill_name": skill_name}
+            )
+
+        candidate = Path(raw)
+        if (
+            ".." in candidate.parts
+            or candidate.is_absolute()
+            or candidate.drive
+            or raw.startswith(("/", "\\"))
+        ):
+            return make_error(
+                ErrorCode.INVALID_PATH,
+                f"非法的 skill_name：{skill_name}（禁止包含 '..'、绝对路径或盘符）",
+                {"skill_name": skill_name},
+            )
+
+        parts = raw.split("/")
+        target = _loader.skills_dir.joinpath(*parts)
         if target.is_dir():
             target = target / "skill.md"
         if not target.suffix:
             target = target.with_suffix(".md")
+
+        # 路径穿越校验：realpath 解析后必须位于 Skills 目录之内
+        skills_root = os.path.realpath(_loader.skills_dir)
+        resolved = os.path.realpath(target)
+        if resolved != skills_root and not resolved.startswith(skills_root + os.sep):
+            logger.warning("write_skill: 路径越界拒绝 skill=%s, resolved=%s", skill_name, resolved)
+            return make_error(
+                ErrorCode.INVALID_PATH,
+                f"目标路径越出 Skills 目录，拒绝写入：{skill_name}",
+                {"skill_name": skill_name, "resolved_path": resolved},
+            )
 
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
@@ -883,7 +925,7 @@ def write_skill(
 
     except Exception as e:
         logger.error("write_skill: %s", e, exc_info=True)
-        return f"# 错误\n写入异常：{e}"
+        return make_error(ErrorCode.INTERNAL_ERROR, f"写入异常：{e}")
 
 
 # ── Material Compaction Helpers ────────────────────────────────
